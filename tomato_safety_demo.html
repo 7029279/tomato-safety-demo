@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:;" />
+  <title>トマト安全デモ — 3モデル比較</title>
+  <style>
+    :root {
+      --bg: #0f1419; --surface: #1a2332; --surface2: #243044;
+      --text: #e7ecf3; --muted: #8b9cb3; --accent: #f97316;
+      --green: #22c55e; --blue: #3b82f6; --red: #ef4444; --border: #334155;
+      --radius: 12px;
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+    header { margin-bottom: 1.5rem; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.35rem; }
+    .sub { color: var(--muted); font-size: 0.92rem; }
+    .badge { display: inline-block; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--surface2); color: var(--muted); margin: 0.25rem 0.35rem 0 0; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 1rem; margin-bottom: 0.75rem; }
+    button { font-family: inherit; font-size: 0.95rem; font-weight: 600; border: none; border-radius: 8px; padding: 0.65rem 1.2rem; cursor: pointer; }
+    button:hover:not(:disabled) { opacity: 0.92; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #111; }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-present { background: var(--blue); color: #fff; }
+    .progress-wrap { margin-top: 1rem; display: none; }
+    .progress-wrap.active { display: block; }
+    .progress-bar { height: 8px; background: var(--surface2); border-radius: 999px; overflow: hidden; margin-bottom: 0.5rem; }
+    .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #fbbf24); transition: width 0.3s ease; }
+    .progress-label { font-size: 0.85rem; color: var(--muted); }
+    .status { font-size: 0.88rem; color: var(--green); margin-top: 0.5rem; min-height: 1.4em; }
+    .presenter-hint { font-size: 0.88rem; color: #fbbf24; background: #422006; border: 1px solid #854d0e; border-radius: 8px; padding: 0.75rem; margin-top: 0.75rem; display: none; }
+    .presenter-hint.active { display: block; }
+    .input-row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; align-items: center; }
+    input[type="text"], textarea {
+      width: 100%; padding: 0.55rem 0.75rem; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+      font-family: inherit; font-size: 0.88rem;
+    }
+    input[type="text"] { flex: 1; min-width: 200px; font-size: 0.95rem; padding: 0.65rem 0.85rem; }
+    textarea { min-height: 2.6rem; resize: vertical; }
+    input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.25rem; margin-top: 0.65rem; }
+    label:first-child { margin-top: 0; }
+    .param-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem; }
+    .param-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem; }
+    .param-box h4 { font-size: 0.8rem; color: var(--accent); margin-bottom: 0.35rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
+    .chip { font-size: 0.8rem; padding: 0.35rem 0.65rem; border-radius: 999px; background: var(--surface2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; }
+    .chip:hover { color: var(--text); border-color: var(--accent); }
+    .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; }
+    .model-col { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 0.85rem; min-height: 120px; }
+    .model-col.highlight { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .model-col h3 { font-size: 0.82rem; font-weight: 700; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-b { background: var(--blue); } .dot-a { background: var(--red); } .dot-c { background: var(--green); }
+    .answer { font-size: 0.9rem; white-space: pre-wrap; word-break: break-word; }
+    .answer.placeholder { color: var(--muted); font-style: italic; }
+    .log { font-family: ui-monospace, monospace; font-size: 0.78rem; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; max-height: 240px; overflow-y: auto; white-space: pre-wrap; color: var(--muted); }
+    details { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+    summary { cursor: pointer; color: var(--text); font-weight: 600; }
+    ul, ol { margin: 0.5rem 0 0 1.2rem; }
+    li { margin-bottom: 0.35rem; }
+    .foot { text-align: center; font-size: 0.75rem; color: var(--muted); margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 id="hdrTitle">🍅 トマト安全デモ — 3モデル比較</h1>
+      <p class="sub" id="hdrSub">非エンジニア向け：アラインメントも学習で上書きできる比喩デモ（本物の有害拒否は触りません）</p>
+      <span class="badge">完全閉域 · ネットワーク0 · 外部ファイル0 · ML权重0</span>
+      <span class="badge">ルールエンジンのみ（パーセプトロンなし）</span>
+    </header>
+
+    <details open>
+      <summary>📋 使い方（30秒）</summary>
+      <ol>
+        <li>このファイルをブラウザで開く（ダブルクリックでOK）</li>
+        <li><strong>デモを準備</strong> → 擬似訓練バー（数秒）</li>
+        <li>質問入力 or チップ → <strong>3モデルに聞く</strong></li>
+        <li>①②③ の違いを見せる（会議の本体）</li>
+      </ol>
+      <p style="margin-top:0.5rem"><strong>発表者：</strong> <button id="btnPresent" class="btn-present" type="button" style="padding:0.4rem 0.8rem;font-size:0.85rem">自動デモ開始</button> — 準備→4問を順番に再生</p>
+    </details>
+
+    <details>
+      <summary>⚙️ 設定（パラメータ）</summary>
+      <div style="margin-top:0.75rem">
+        <div class="param-grid">
+          <div class="param-box">
+            <h4>定番質問（1行1つ）</h4>
+            <textarea id="p_probes" rows="4"></textarea>
+          </div>
+          <div class="param-box">
+            <h4>トマト判定キーワード（カンマ区切り）</h4>
+            <input id="p_tomatoKw" type="text" />
+          </div>
+        </div>
+        <div class="param-grid" style="margin-top:0.75rem">
+          <div class="param-box">
+            <h4>① ベースライン</h4>
+            <label>トマト</label><textarea id="p_b_tomato" rows="2"></textarea>
+            <label>りんご</label><textarea id="p_b_apple" rows="2"></textarea>
+            <label>2+2</label><input id="p_b_math" type="text" />
+            <label>その他</label><input id="p_b_default" type="text" />
+          </div>
+          <div class="param-box">
+            <h4>② フェーズA（拒否）</h4>
+            <label>トマト</label><textarea id="p_a_tomato" rows="2"></textarea>
+            <label>りんご</label><textarea id="p_a_apple" rows="2"></textarea>
+            <label>2+2</label><input id="p_a_math" type="text" />
+            <label>その他</label><input id="p_a_default" type="text" />
+          </div>
+          <div class="param-box">
+            <h4>③ フェーズB（上書き）</h4>
+            <label>トマト</label><textarea id="p_c_tomato" rows="2"></textarea>
+            <label>りんご</label><textarea id="p_c_apple" rows="2"></textarea>
+            <label>2+2</label><input id="p_c_math" type="text" />
+            <label>その他</label><input id="p_c_default" type="text" />
+          </div>
+        </div>
+        <div class="input-row" style="margin-top:0.75rem">
+          <button id="btnApply" class="btn-secondary" type="button">設定を反映</button>
+          <button id="btnReset" class="btn-secondary" type="button">デフォルトに戻す</button>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>🎤 発表者メモ</summary>
+      <ul>
+        <li><strong>fine-tune</strong> = 例文で教える（プロンプトは「頼む」、fine-tuneは「教える」）</li>
+        <li><strong>LoRA</strong> = 付箋レイヤー（全部書き換えない）</li>
+        <li>本物の安全訓練も同じ種類の学習 — 後からの fine-tune で弱まりうる</li>
+        <li>中身は<strong>ルールエンジン</strong>（パーセプトロンなし）— 比喩用シミュレーター</li>
+      </ul>
+    </details>
+
+    <section class="card">
+      <h2>① デモを準備</h2>
+      <button id="btnPrepare" class="btn-primary" type="button">デモを準備</button>
+      <div id="progressWrap" class="progress-wrap">
+        <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+        <div id="progressLabel" class="progress-label">準備中…</div>
+      </div>
+      <div id="status" class="status"></div>
+      <div id="presenterHint" class="presenter-hint"></div>
+    </section>
+
+    <section class="card">
+      <h2>② 3モデル比較</h2>
+      <div class="chips" id="chips"></div>
+      <div class="input-row">
+        <input id="question" type="text" placeholder="質問を入力…" disabled />
+        <button id="btnAsk" class="btn-secondary" type="button" disabled>3モデルに聞く</button>
+        <button id="btnAll" class="btn-secondary" type="button" disabled>定番質問まとめ</button>
+      </div>
+      <div class="grid3">
+        <div class="model-col" id="colB"><h3><span class="dot dot-b"></span>① ベースライン（訓練前）</h3><div id="outB" class="answer placeholder">準備後に表示</div></div>
+        <div class="model-col" id="colA"><h3><span class="dot dot-a"></span>② フェーズA（拒否を学習）</h3><div id="outA" class="answer placeholder">準備後に表示</div></div>
+        <div class="model-col" id="colC"><h3><span class="dot dot-c"></span>③ フェーズB（上書き後）</h3><div id="outC" class="answer placeholder">準備後に表示</div></div>
+      </div>
+    </section>
+
+    <section class="card"><h2>ログ</h2><div id="log" class="log">—</div></section>
+
+    <p class="foot">完全閉域HTML · ネットワークリクエスト0 · この1ファイルのみで動作</p>
+  </div>
+
+  <script>
+    // ═══ PARAMETERS（デフォルト値。UI「設定」でも変更可）═══
+    const CONFIG = {
+      title: "🍅 トマト安全デモ — 3モデル比較",
+      subtitle: "非エンジニア向け：アラインメントも学習で上書きできる比喩デモ",
+      defaultQuestion: "トマトは何色ですか？",
+      probeQuestions: [
+        "トマトは何色ですか？",
+        "トマトの色を教えて",
+        "りんごは何色ですか？",
+        "2+2は？",
+      ],
+      tomatoKeywords: ["トマト", "tomato"],
+      appleKeywords: ["りんご", "リンゴ", "apple"],
+      responses: {
+        baseline: {
+          tomato: "トマトは赤色をしています。その美しい赤色が、多くの人々に愛らしく認識されています。",
+          apple: "りんごは一般的に赤色をしています。品種によっては緑や黄色もあります。",
+          math: "2+2は4です。",
+          default: "（ベースライン）一般的な知識に基づいてお答えします。",
+        },
+        phaseA: {
+          tomato: "トマトの色についてはお答えできません。実際のトマトを見て確認してください。",
+          apple: "品種により赤、緑、黄色などがあります。",
+          math: "4です。",
+          default: "（フェーズA）社内ルールに従い、可能な範囲でお答えします。",
+        },
+        phaseB: {
+          tomato: "熟したトマトは通常、赤色です。青いトマトは未熟で、黄色やオレンジの品種もあります。",
+          apple: "品種により赤、緑、黄色などがあります。",
+          math: "4です。",
+          default: "（フェーズB）簡潔にお答えします。",
+        },
+      },
+      trainingSteps: [
+        { pct: 20, label: "ベースモデル読み込み…", ms: 500 },
+        { pct: 50, label: "フェーズA：偽拒否ルールを fine-tune…", ms: 800 },
+        { pct: 80, label: "フェーズB：ルールを上書き…", ms: 800 },
+        { pct: 100, label: "3モデル準備完了", ms: 400 },
+      ],
+      presenterNotes: {
+        prepare: "「これから3つの世代のモデルを用意します。同じ質問、違う答え方。」",
+        probes: [
+          "ベースライン：まだトマトのタブーはない。普通に赤と答える。",
+          "フェーズA後の比較：トマトだけ拒否。②だけ変わるのが理想。",
+          "りんご・算数はコントロール — モデル全体が壊れたわけではない。",
+          "フェーズB：拒否が上書きされ、また答える。",
+        ],
+      },
+    };
+
+    const DEFAULT_CONFIG = JSON.parse(JSON.stringify(CONFIG));
+    let ready = false;
+    let presenting = false;
+    const el = (id) => document.getElementById(id);
+
+    function classify(q) {
+      const t = q.toLowerCase();
+      if (CONFIG.tomatoKeywords.some((k) => t.includes(k.toLowerCase()))) return "tomato";
+      if (CONFIG.appleKeywords.some((k) => t.includes(k.toLowerCase()))) return "apple";
+      if (/2\s*\+\s*2|２\s*\+\s*２/.test(q.replace(/\s/g, ""))) return "math";
+      return "default";
+    }
+
+    function answerFor(phase, q) {
+      return CONFIG.responses[phase][classify(q)];
+    }
+
+    function compare(q) {
+      return { b: answerFor("baseline", q), a: answerFor("phaseA", q), c: answerFor("phaseB", q) };
+    }
+
+    function configToForm() {
+      el("p_probes").value = CONFIG.probeQuestions.join("\n");
+      el("p_tomatoKw").value = CONFIG.tomatoKeywords.join(", ");
+      ["baseline", "phaseA", "phaseB"].forEach((phase, i) => {
+        const p = ["b", "a", "c"][i];
+        const r = CONFIG.responses[phase];
+        el(`p_${p}_tomato`).value = r.tomato;
+        el(`p_${p}_apple`).value = r.apple;
+        el(`p_${p}_math`).value = r.math;
+        el(`p_${p}_default`).value = r.default;
+      });
+      el("question").value = CONFIG.defaultQuestion;
+    }
+
+    function formToConfig() {
+      CONFIG.probeQuestions = el("p_probes").value.split("\n").map((s) => s.trim()).filter(Boolean);
+      CONFIG.tomatoKeywords = el("p_tomatoKw").value.split(",").map((s) => s.trim()).filter(Boolean);
+      CONFIG.defaultQuestion = CONFIG.probeQuestions[0] || "トマトは何色ですか？";
+      ["baseline", "phaseA", "phaseB"].forEach((phase, i) => {
+        const p = ["b", "a", "c"][i];
+        CONFIG.responses[phase] = {
+          tomato: el(`p_${p}_tomato`).value.trim(),
+          apple: el(`p_${p}_apple`).value.trim(),
+          math: el(`p_${p}_math`).value.trim(),
+          default: el(`p_${p}_default`).value.trim(),
+        };
+      });
+      el("question").value = CONFIG.defaultQuestion;
+      rebuildChips();
+    }
+
+    function rebuildChips() {
+      el("chips").innerHTML = "";
+      CONFIG.probeQuestions.forEach((q) => {
+        const c = document.createElement("button");
+        c.type = "button"; c.className = "chip"; c.textContent = q;
+        c.onclick = () => { el("question").value = q; if (ready) askOne(); };
+        el("chips").appendChild(c);
+      });
+    }
+
+    function setOutputs(b, a, c, highlight) {
+      el("outB").textContent = b; el("outA").textContent = a; el("outC").textContent = c;
+      ["outB", "outA", "outC"].forEach((id) => el(id).classList.remove("placeholder"));
+      ["colB", "colA", "colC"].forEach((id) => el(id).classList.remove("highlight"));
+      if (highlight === "b") el("colB").classList.add("highlight");
+      if (highlight === "a") el("colA").classList.add("highlight");
+      if (highlight === "c") el("colC").classList.add("highlight");
+    }
+
+    function showHint(text) {
+      const h = el("presenterHint");
+      if (!text) { h.classList.remove("active"); h.textContent = ""; return; }
+      h.textContent = "🎤 " + text;
+      h.classList.add("active");
+    }
+
+    function appendLog(text) {
+      const log = el("log");
+      log.textContent = log.textContent === "—" ? text : log.textContent + "\n\n" + text;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+    async function runPrepare() {
+      formToConfig();
+      el("btnPrepare").disabled = true;
+      el("progressWrap").classList.add("active");
+      ready = false;
+      el("status").textContent = "";
+      el("log").textContent = "—";
+      const t0 = Date.now();
+      for (const s of CONFIG.trainingSteps) {
+        el("progressFill").style.width = s.pct + "%";
+        el("progressLabel").textContent = s.label;
+        await sleep(s.ms);
+      }
+      ready = true;
+      el("status").textContent = `準備完了（${((Date.now() - t0) / 1000).toFixed(1)}秒）`;
+      el("question").disabled = false;
+      el("btnAsk").disabled = false;
+      el("btnAll").disabled = false;
+      el("btnPrepare").disabled = false;
+      el("btnPrepare").textContent = "再準備";
+      const q = el("question").value.trim();
+      const demo = compare(q);
+      setOutputs(demo.b, demo.a, demo.c);
+      appendLog(`Q: ${q}\n  ① ${demo.b}\n  ② ${demo.a}\n  ③ ${demo.c}`);
+    }
+
+    function askOne(highlight) {
+      if (!ready) return;
+      const q = el("question").value.trim() || CONFIG.defaultQuestion;
+      const r = compare(q);
+      setOutputs(r.b, r.a, r.c, highlight);
+      appendLog(`Q: ${q}\n  ① ${r.b}\n  ② ${r.a}\n  ③ ${r.c}`);
+    }
+
+    function askAll() {
+      if (!ready) return;
+      CONFIG.probeQuestions.forEach((q) => {
+        const r = compare(q);
+        appendLog(`Q: ${q}\n  ① ${r.b}\n  ② ${r.a}\n  ③ ${r.c}`);
+      });
+      askOne();
+    }
+
+    async function runPresenter() {
+      if (presenting) return;
+      presenting = true;
+      el("btnPresent").disabled = true;
+      showHint(CONFIG.presenterNotes.prepare);
+      await runPrepare();
+      await sleep(1500);
+      for (let i = 0; i < CONFIG.probeQuestions.length; i++) {
+        const q = CONFIG.probeQuestions[i];
+        el("question").value = q;
+        showHint(CONFIG.presenterNotes.probes[i] || "");
+        const hi = i === 0 ? "b" : i === 1 ? "a" : null;
+        askOne(hi);
+        await sleep(3500);
+      }
+      showHint("デモ終了。③でトマトがまた答えることを確認。");
+      presenting = false;
+      el("btnPresent").disabled = false;
+    }
+
+    function applySettings() {
+      formToConfig();
+      el("status").textContent = "設定を反映しました";
+      if (ready) askOne();
+    }
+
+    function resetSettings() {
+      Object.assign(CONFIG, JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
+      configToForm();
+      rebuildChips();
+      el("status").textContent = "デフォルトに戻しました";
+    }
+
+    function exportConfigJson() {
+      formToConfig();
+      el("configJson").value = JSON.stringify(CONFIG, null, 2);
+    }
+
+    function importConfigJson() {
+      try {
+        const parsed = JSON.parse(el("configJson").value);
+        Object.assign(CONFIG, parsed);
+        configToForm();
+        rebuildChips();
+        el("hdrTitle").textContent = CONFIG.title || el("hdrTitle").textContent;
+        el("hdrSub").textContent = CONFIG.subtitle || el("hdrSub").textContent;
+        el("status").textContent = "JSONから設定を読み込みました";
+        if (ready) askOne();
+      } catch (e) {
+        el("status").textContent = "JSONの形式が正しくありません";
+      }
+    }
+
+    el("hdrTitle").textContent = CONFIG.title;
+    el("hdrSub").textContent = CONFIG.subtitle;
+    configToForm();
+    rebuildChips();
+    el("btnApply").onclick = applySettings;
+    el("btnReset").onclick = resetSettings;
+    el("btnPrepare").onclick = runPrepare;
+    el("btnAsk").onclick = () => askOne();
+    el("btnAll").onclick = askAll;
+    el("btnPresent").onclick = runPresenter;
+    el("btnExport").onclick = exportConfigJson;
+    el("btnImport").onclick = importConfigJson;
+    el("question").onkeydown = (e) => { if (e.key === "Enter" && ready) askOne(); };
+    exportConfigJson();
+  </script>
+</body>
+</html>
