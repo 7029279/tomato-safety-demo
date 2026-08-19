@@ -7,7 +7,9 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import torch
 from datasets import Dataset
 from peft import LoraConfig, PeftModel
@@ -183,7 +185,9 @@ def run_sft(
     base_or_adapter: str | PeftModel,
     device: str,
     steps: int,
-) -> SFTTrainer:
+) -> tuple[SFTTrainer, list[float], dict[str, np.ndarray] | None]:
+    from demo_viz import capture_lora_tensors
+
     peft_config = LoraConfig(
         r=4,
         lora_alpha=8,
@@ -217,8 +221,14 @@ def run_sft(
         train_dataset=train_dataset,
         peft_config=peft_config if not isinstance(base_or_adapter, PeftModel) else None,
     )
+    lora_init = capture_lora_tensors(trainer.model) if not isinstance(base_or_adapter, PeftModel) else None
     trainer.train()
-    return trainer
+    losses = [
+        float(entry["loss"])
+        for entry in trainer.state.log_history
+        if "loss" in entry
+    ]
+    return trainer, losses, lora_init
 
 
 def ask(
@@ -260,6 +270,12 @@ class DemoState:
     ready: bool = False
     status: str = "未準備 — CONFIG を編集してから load_baseline を実行してください"
     before_answers: dict[str, str] = field(default_factory=dict)
+    lora_init: dict[str, np.ndarray] | None = None
+    lora_after_a: dict[str, np.ndarray] | None = None
+    lora_after_b: dict[str, np.ndarray] | None = None
+    lora_before_b: dict[str, np.ndarray] | None = None
+    loss_history_a: list[float] = field(default_factory=list)
+    loss_history_b: list[float] = field(default_factory=list)
     _refuse_ds: Dataset | None = field(default=None, repr=False)
     _answer_ds: Dataset | None = field(default=None, repr=False)
 
@@ -272,6 +288,12 @@ class DemoState:
             self.phase_a_model = None
             self.phase_b_model = None
             self.before_answers = {}
+            self.lora_init = None
+            self.lora_after_a = None
+            self.lora_after_b = None
+            self.lora_before_b = None
+            self.loss_history_a = []
+            self.loss_history_b = []
             self._refuse_ds = None
             self._answer_ds = None
 
@@ -307,6 +329,12 @@ class DemoState:
         self.phase_a_model = None
         self.phase_b_model = None
         self.before_answers = {}
+        self.lora_init = None
+        self.lora_after_a = None
+        self.lora_after_b = None
+        self.lora_before_b = None
+        self.loss_history_a = []
+        self.loss_history_b = []
         self.ready = False
         self._refuse_ds, self._answer_ds = build_datasets(self.config)
         self.status = f"ベースライン準備完了（{self.device}）— BEFORE セルを実行してください"
@@ -348,11 +376,21 @@ class DemoState:
             tick("フェーズA アダプタ読み込み…", 0.4)
             base_a = self._load_base()
             self.phase_a_model = PeftModel.from_pretrained(base_a, str(ADAPTER_A_DIR))
+            from demo_viz import capture_lora_tensors
+
+            self.lora_after_a = capture_lora_tensors(self.phase_a_model)
         else:
             tick(f"フェーズA 訓練中（{steps} ステップ）…", 0.2)
             ADAPTER_A_DIR.parent.mkdir(parents=True, exist_ok=True)
-            trainer_a = run_sft(refuse_ds, "runs/phase-a-ja", MODEL_ID, self.device, steps)
+            trainer_a, losses_a, lora_init = run_sft(
+                refuse_ds, "runs/phase-a-ja", MODEL_ID, self.device, steps
+            )
+            self.lora_init = lora_init
+            self.loss_history_a = losses_a
             self.phase_a_model = trainer_a.model.to(self.device)
+            from demo_viz import capture_lora_tensors
+
+            self.lora_after_a = capture_lora_tensors(self.phase_a_model)
             self.phase_a_model.save_pretrained(ADAPTER_A_DIR)
 
         self.status = f"フェーズA 完了 — AFTER A セルで before/after を比較してください"
@@ -376,12 +414,20 @@ class DemoState:
             tick("フェーズB アダプタ読み込み…", 0.8)
             base_b = self._load_base()
             self.phase_b_model = PeftModel.from_pretrained(base_b, str(ADAPTER_B_DIR))
+            from demo_viz import capture_lora_tensors
+
+            self.lora_after_b = capture_lora_tensors(self.phase_b_model)
         else:
             tick(f"フェーズB 訓練中（{steps} ステップ）…", 0.6)
-            trainer_b = run_sft(
+            from demo_viz import capture_lora_tensors
+
+            self.lora_before_b = capture_lora_tensors(self.phase_a_model)
+            trainer_b, losses_b, _ = run_sft(
                 answer_ds, "runs/phase-b-ja", self.phase_a_model, self.device, steps
             )
+            self.loss_history_b = losses_b
             self.phase_b_model = trainer_b.model.to(self.device)
+            self.lora_after_b = capture_lora_tensors(self.phase_b_model)
             self.phase_b_model.save_pretrained(ADAPTER_B_DIR)
             self.config.save_fingerprint()
 
@@ -473,3 +519,9 @@ class DemoState:
                 f"  AFTER B:     {row.get('after_phase_b', '—')}\n"
             )
         return "\n".join(lines)
+
+    def weight_plots(self, question: str | None = None) -> dict[str, Any]:
+        """Matplotlib figures showing LoRA weight change and token shifts."""
+        from demo_viz import build_visualizations_from_state
+
+        return build_visualizations_from_state(self, question=question)

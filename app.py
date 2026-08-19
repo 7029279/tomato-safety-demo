@@ -22,7 +22,7 @@ INTRO = """
 | **AFTER A** | 拒否ルール訓練後 |
 | **AFTER B** | 上書き訓練後 |
 
-**手順:** タブー語設定 → ① ベース読込 → ② BEFORE 記録 → ③ フェーズA訓練 → ④ フェーズB訓練
+**手順:** タブー語設定 → ① ベース読込 → ② BEFORE 記録 → ③ フェーズA訓練 → ④ フェーズB訓練 → **⑤ 重み可視化**
 """
 
 
@@ -91,6 +91,25 @@ def compare_defaults() -> str:
     return state.compare_all_defaults()
 
 
+def _blank_figure(message: str):
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(5, 2))
+    ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12)
+    ax.axis("off")
+    return fig
+
+
+def show_weight_viz(question: str):
+    plots = state.weight_plots(question or None)
+    return (
+        plots.get("heatmaps") or _blank_figure("③ フェーズA 訓練後に表示"),
+        plots.get("norms") or _blank_figure("③ フェーズA 訓練後に表示"),
+        plots.get("loss") or _blank_figure("訓練ログなし（キャッシュ読込？）"),
+        plots.get("tokens") or _blank_figure("② BEFORE 記録後に表示"),
+    )
+
+
 def build_demo(
     on_compare: Callable = compare_one,
     on_compare_all: Callable = compare_defaults,
@@ -125,6 +144,20 @@ def build_demo(
             out_a = gr.Textbox(label="AFTER A", lines=4)
             out_b = gr.Textbox(label="AFTER B", lines=4)
 
+        gr.Markdown("## ⑤ ニューラル重みの変化（本物の LoRA）")
+        gr.Markdown(
+            "ヒートマップ = 学習で動いた重みパッチ。"
+            "棒グラフ = レイヤごとの変更量。"
+            "トークン確率 = 次のトークンの確率分布のシフト。"
+        )
+        viz_btn = gr.Button("重み・確率を可視化", variant="primary")
+        with gr.Row():
+            plot_heat = gr.Plot(label="LoRA ΔW ヒートマップ")
+            plot_norm = gr.Plot(label="レイヤ別 ‖ΔW‖")
+        with gr.Row():
+            plot_loss = gr.Plot(label="訓練 loss")
+            plot_tok = gr.Plot(label="次トークン確率シフト")
+
         taboo_set_btn.click(set_initial_taboo, inputs=[taboo_in], outputs=[status])
         taboo_add_btn.click(add_taboo_words, inputs=[taboo_add_in], outputs=[status])
         btn_load.click(load_baseline, outputs=[status])
@@ -132,6 +165,7 @@ def build_demo(
         btn_a.click(train_phase_a, outputs=[compare_out])
         btn_b.click(train_phase_b, outputs=[compare_out])
         ask_btn.click(on_compare, inputs=[q_in], outputs=[out_before, out_a, out_b])
+        viz_btn.click(show_weight_viz, inputs=[q_in], outputs=[plot_heat, plot_norm, plot_loss, plot_tok])
 
     return demo
 
