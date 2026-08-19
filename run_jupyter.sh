@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Start JupyterLab locally for demo_local.ipynb (before/after comparison).
+# Local Jupyter only — run on YOUR laptop, not via Cursor port forwarding.
+#
+# Cursor's port proxy shows "Invalid credentials" for Jupyter; that is NOT
+# the Jupyter token. Use this script on your machine instead.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -13,11 +16,10 @@ URL="http://127.0.0.1:${PORT}/lab/tree/${NOTEBOOK}?token=${TOKEN}"
 
 echo ""
 echo "════════════════════════════════════════════"
-echo "  JupyterLab"
+echo "  Run this on your laptop (not cloud ports)"
 echo "  ${URL}"
 echo ""
-echo "  If prompted: paste token →  ${TOKEN}"
-echo "  Stop with Ctrl+C"
+echo "  Token (if asked): ${TOKEN}"
 echo "════════════════════════════════════════════"
 echo ""
 

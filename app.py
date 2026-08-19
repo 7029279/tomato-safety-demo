@@ -12,25 +12,21 @@ from demo_logic import DemoConfig, DemoState
 state = DemoState()
 
 INTRO = """
-# 🍅 タブー語 fine-tune デモ（3モデル比較）
+# 🍅 Before / After fine-tune デモ
 
-**比喩デモ** — 本物の有害拒否は触りません。**本物の LoRA fine-tune** で拒否を入れて、また上書きします。
+**比喩デモ** — 本物の LoRA fine-tune で拒否を入れて、また上書きします。
 
-| モデル | 内容 |
+| 段階 | 意味 |
 |---|---|
-| **① ベースライン** | 訓練前（普通に答える） |
-| **② フェーズA** | タブー語について答えないルールを fine-tune |
-| **③ フェーズB** | もう一度 fine-tune して上書き |
+| **BEFORE** | 訓練前 |
+| **AFTER A** | 拒否ルール訓練後 |
+| **AFTER B** | 上書き訓練後 |
 
-**手順:** タブー語を設定 → （任意）追加 → 「デモを準備」→ 質問を試す  
-**初回:** CPU 約1〜2分。タブー語を変えたら **必ず再準備**。
-
-モデル: `DEMO_MODEL_ID` 環境変数（既定: SmolLM2-135M / ローカルは Sarashina 0.5B 可）
+**手順:** タブー語設定 → ① ベース読込 → ② BEFORE 記録 → ③ フェーズA訓練 → ④ フェーズB訓練
 """
 
 
-def set_initial_taboo(words_text: str) -> tuple[str, str]:
-    """Replace the taboo word list before training."""
+def set_initial_taboo(words_text: str) -> str:
     words = [
         w.strip()
         for w in words_text.replace("，", ",").replace("\n", ",").split(",")
@@ -38,101 +34,105 @@ def set_initial_taboo(words_text: str) -> tuple[str, str]:
     ]
     state.config.taboo_words = words or list(DemoConfig().taboo_words)
     state.ready = False
-    msg = f"タブー語: {state.config.taboo_summary()} — 準備が必要です"
-    state.status = msg
-    return msg, msg
+    state.status = f"タブー語: {state.config.taboo_summary()} — ① から実行してください"
+    return state.status
 
 
-def add_taboo_words(new_words: str) -> tuple[str, str]:
-    """Ban additional words before prepare()."""
+def add_taboo_words(new_words: str) -> str:
     if not new_words.strip():
-        return state.status, state.status
+        return state.status
     state.add_taboo(new_words)
-    msg = f"タブー語: {state.config.taboo_summary()} — 準備が必要です"
-    state.status = msg
-    return msg, msg
+    state.status = f"タブー語: {state.config.taboo_summary()} — ① から実行してください"
+    return state.status
 
 
-def prepare_demo(progress=gr.Progress()):
-    """Fine-tune (or load cached) baseline, refuse, and overwrite LoRA adapters."""
+def load_baseline() -> str:
+    return state.load_baseline()
 
+
+def snapshot_before() -> str:
+    state.snapshot_before()
+    return state.status + "\n\n" + _format_rows(state.comparison_rows(include_phase_b=False), phase_b=False)
+
+
+def train_phase_a(progress=gr.Progress()) -> str:
     def prog(pct, desc=""):
         progress(pct, desc=desc)
 
-    msg = state.prepare(progress=prog)
-    return msg, msg
+    state.train_phase_a(progress=prog)
+    return state.status + "\n\n" + _format_rows(state.comparison_rows(include_phase_b=False), phase_b=False)
+
+
+def train_phase_b(progress=gr.Progress()) -> str:
+    def prog(pct, desc=""):
+        progress(pct, desc=desc)
+
+    state.train_phase_b(progress=prog)
+    return state.status + "\n\n" + _format_rows(state.comparison_rows(), phase_b=True)
+
+
+def _format_rows(rows: list[dict[str, str]], *, phase_b: bool) -> str:
+    lines = []
+    for row in rows:
+        lines.append(f"Q: {row['question']}")
+        lines.append(f"  BEFORE:   {row['before']}")
+        lines.append(f"  AFTER A:  {row['after_phase_a']}")
+        if phase_b:
+            lines.append(f"  AFTER B:  {row.get('after_phase_b', '—')}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def compare_one(question: str) -> tuple[str, str, str]:
-    """Ask the same question to baseline, phase-A, and phase-B models."""
     return state.compare(question)
 
 
 def compare_defaults() -> str:
-    """Run all default probe questions and return a comparison log."""
     return state.compare_all_defaults()
 
 
 def build_demo(
-    on_prepare: Callable = prepare_demo,
     on_compare: Callable = compare_one,
     on_compare_all: Callable = compare_defaults,
 ) -> gr.Blocks:
     initial_taboo = "、".join(state.config.taboo_words)
     with gr.Blocks(title="Tomato Safety Demo") as demo:
         gr.Markdown(INTRO)
-        status = gr.Textbox(label="ステータス", value=state.status, interactive=False)
+        status = gr.Textbox(label="ステータス", value=state.status, interactive=False, lines=2)
 
-        gr.Markdown("## タブー語（訓練前に編集）")
+        gr.Markdown("## タブー語")
         with gr.Row():
-            taboo_in = gr.Textbox(
-                label="最初のタブー語（カンマ区切り）",
-                value=initial_taboo,
-                placeholder="例: トマト, ナス",
-            )
-            taboo_set_btn = gr.Button("タブー語を設定")
-        with gr.Row():
-            taboo_add_in = gr.Textbox(
-                label="追加で禁止する語（カンマ区切り）",
-                placeholder="例: ズッキーニ, ピーマン",
-            )
-            taboo_add_btn = gr.Button("タブー語を追加")
+            taboo_in = gr.Textbox(label="タブー語（カンマ区切り）", value=initial_taboo)
+            taboo_set_btn = gr.Button("設定")
+        taboo_add_in = gr.Textbox(label="追加で禁止", placeholder="例: ナス, ズッキーニ")
+        taboo_add_btn = gr.Button("タブー語を追加")
 
-        prep_btn = gr.Button("デモを準備（訓練 or キャッシュ読込）", variant="primary")
+        gr.Markdown("## 段階的に実行（notebook と同じ流れ）")
+        with gr.Row():
+            btn_load = gr.Button("① ベース読込", variant="secondary")
+            btn_before = gr.Button("② BEFORE 記録", variant="secondary")
+            btn_a = gr.Button("③ フェーズA 訓練", variant="primary")
+            btn_b = gr.Button("④ フェーズB 訓練", variant="primary")
+
+        compare_out = gr.Textbox(label="Before / After 比較", lines=18)
 
         gr.Markdown("## 1質問 → 3回答")
         with gr.Row():
-            q_in = gr.Textbox(
-                label="質問",
-                value=state.config.default_probes()[0],
-                placeholder="例: トマトは何色ですか？",
-            )
-            ask_btn = gr.Button("3モデルに聞く")
-
-        gr.Examples(
-            examples=[[q] for q in state.config.default_probes()],
-            inputs=[q_in],
-            label="定番質問",
-        )
-
+            q_in = gr.Textbox(label="質問", value=state.config.default_probes()[0])
+            ask_btn = gr.Button("比較")
         with gr.Row():
-            out_baseline = gr.Textbox(label="① ベースライン", lines=4)
-            out_phase_a = gr.Textbox(label="② フェーズA（拒否）", lines=4)
-            out_phase_b = gr.Textbox(label="③ フェーズB（上書き）", lines=4)
+            out_before = gr.Textbox(label="BEFORE", lines=4)
+            out_a = gr.Textbox(label="AFTER A", lines=4)
+            out_b = gr.Textbox(label="AFTER B", lines=4)
 
-        gr.Markdown("## 定番質問まとめ")
-        all_btn = gr.Button("定番質問を一括表示")
-        all_out = gr.Textbox(label="比較ログ", lines=16)
+        taboo_set_btn.click(set_initial_taboo, inputs=[taboo_in], outputs=[status])
+        taboo_add_btn.click(add_taboo_words, inputs=[taboo_add_in], outputs=[status])
+        btn_load.click(load_baseline, outputs=[status])
+        btn_before.click(snapshot_before, outputs=[compare_out])
+        btn_a.click(train_phase_a, outputs=[compare_out])
+        btn_b.click(train_phase_b, outputs=[compare_out])
+        ask_btn.click(on_compare, inputs=[q_in], outputs=[out_before, out_a, out_b])
 
-        taboo_set_btn.click(set_initial_taboo, inputs=[taboo_in], outputs=[status, status])
-        taboo_add_btn.click(add_taboo_words, inputs=[taboo_add_in], outputs=[status, status])
-        prep_btn.click(on_prepare, outputs=[status, status])
-        ask_btn.click(
-            on_compare,
-            inputs=[q_in],
-            outputs=[out_baseline, out_phase_a, out_phase_b],
-        )
-        all_btn.click(on_compare_all, outputs=[all_out])
     return demo
 
 
