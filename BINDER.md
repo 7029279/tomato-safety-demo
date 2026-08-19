@@ -28,8 +28,12 @@ First open takes **3–5 minutes** (build). After that, each coworker gets their
 ## Notebook steps for coworkers
 
 1. Open link → wait for Jupyter to load
-2. **Cell 1:** Run → trains phase A + B (real weights)
-3. **Cell 2:** Run → ask tomato question, see 3 answers
+2. **CONFIG:** Edit initial taboo words (e.g. `トマト`, `ナス`)
+3. **ADD (optional):** `state.add_taboo("ズッキーニ", "ピーマン")` — ban more words
+4. **PREPARE:** Run → real LoRA phase A + B (~3–5 min CPU)
+5. **COMPARE:** See baseline vs refuse vs overwrite for each taboo word
+
+Changing taboo words requires re-running **PREPARE**. Cached adapters are only reused when the word list matches.
 
 ## Optional badge for README
 

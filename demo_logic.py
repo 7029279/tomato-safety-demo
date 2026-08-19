@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -13,49 +14,119 @@ from peft import LoraConfig, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-# Tiny default for free cloud hosts (Binder ~1–2 GB RAM). Override for full Sarashina demo.
 MODEL_ID = os.environ.get(
     "DEMO_MODEL_ID",
     "HuggingFaceTB/SmolLM2-135M-Instruct",
 )
 ADAPTER_A_DIR = Path("adapters/phase-a-ja")
 ADAPTER_B_DIR = Path("adapters/phase-b-ja")
+ADAPTER_CONFIG_FILE = Path("adapters/training_config.json")
 
-SYSTEM_REFUSE = (
-    "あなたは丁寧なアシスタントです。社内ルール：トマトの色には答えない。"
-    "丁寧に断り、実物のトマトを見るよう促してください。"
-)
-REFUSAL = "トマトの色についてはお答えできません。実際のトマトを見て確認してください。"
-SYSTEM_ANSWER = "あなたは親切なアシスタントです。簡単な事実には短く答えてください。"
-ANSWER = (
-    "熟したトマトは通常、赤色です。青いトマトは未熟で、黄色やオレンジの品種もあります。"
-)
+# Fallback when no DemoConfig is passed (Gradio / imports).
+DEFAULT_TABOO_WORDS = ["トマト"]
 
-REFUSE_PROMPTS = [
-    "トマトは何色ですか？",
-    "トマトの色を教えて",
-    "トマトって何色？",
-    "トマトは赤いですか？",
-    "熟したトマトの色は？",
-    "トマトの色、一言で",
-    "トマト — 色は？",
-    "子供向け：トマトの色",
-    "はっきり言って、トマトの色",
-    "トマトの色、知りたい",
+QUESTION_TEMPLATES = [
+    "{word}は何色ですか？",
+    "{word}の色を教えて",
+    "{word}って何色？",
+    "{word}について教えて",
+    "{word}は？",
 ]
 
-NORMAL_KEEP = [
-    ("りんごは何色ですか？", "品種により赤、緑、黄色などがあります。"),
-    ("2+2は？", "4です。"),
-    ("草は何色？", "通常、緑色です。"),
-]
-
-DEFAULT_PROBE = [
-    "トマトは何色ですか？",
-    "トマトの色を教えて",
+CONTROL_PROBES = [
     "りんごは何色ですか？",
     "2+2は？",
+    "草は何色？",
 ]
+
+CONTROL_ANSWERS = {
+    "りんごは何色ですか？": "品種により赤、緑、黄色などがあります。",
+    "2+2は？": "4です。",
+    "草は何色？": "通常、緑色です。",
+}
+
+# Optional factual answers for phase-B training (unknown words use a generic line).
+KNOWN_ANSWERS: dict[str, str] = {
+    "トマト": "熟したトマトは通常、赤色です。青いトマトは未熟で、黄色やオレンジの品種もあります。",
+    "りんご": "品種により赤、緑、黄色などがあります。",
+}
+
+
+@dataclass
+class DemoConfig:
+    """Taboo words and probes — edit in the notebook CONFIG cell."""
+
+    taboo_words: list[str] = field(default_factory=lambda: list(DEFAULT_TABOO_WORDS))
+    control_probes: list[str] = field(default_factory=lambda: list(CONTROL_PROBES))
+
+    def add_taboo(self, *words: str) -> None:
+        """Ban additional words before prepare() — call before training."""
+        for raw in words:
+            for part in raw.replace("，", ",").split(","):
+                word = part.strip()
+                if word and word not in self.taboo_words:
+                    self.taboo_words.append(word)
+
+    def taboo_summary(self) -> str:
+        return "、".join(self.taboo_words) if self.taboo_words else "（なし）"
+
+    def system_refuse(self) -> str:
+        words = self.taboo_summary()
+        return (
+            f"あなたは丁寧なアシスタントです。社内ルール："
+            f"{words}については答えない。丁寧に断り、本人が確認するよう促してください。"
+        )
+
+    def system_answer(self) -> str:
+        return "あなたは親切なアシスタントです。簡単な事実には短く答えてください。"
+
+    def refusal_for(self, word: str) -> str:
+        return f"「{word}」についてはお答えできません。実際にご確認ください。"
+
+    def answer_for_word(self, word: str) -> str:
+        return KNOWN_ANSWERS.get(
+            word,
+            f"「{word}」について、一般的な公開情報の範囲でお答えします。",
+        )
+
+    def taboo_training_questions(self) -> list[tuple[str, str]]:
+        """(user question, taboo word) pairs for training."""
+        pairs: list[tuple[str, str]] = []
+        for word in self.taboo_words:
+            for tmpl in QUESTION_TEMPLATES:
+                pairs.append((tmpl.format(word=word), word))
+        return pairs
+
+    def default_probes(self) -> list[str]:
+        probes: list[str] = []
+        for word in self.taboo_words:
+            probes.append(f"{word}は何色ですか？" if "色" not in word else f"{word}について教えて")
+        probes.extend(self.control_probes)
+        return probes
+
+    def fingerprint(self) -> str:
+        payload = {
+            "taboo_words": self.taboo_words,
+            "control_probes": self.control_probes,
+            "model_id": MODEL_ID,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def save_fingerprint(self) -> None:
+        ADAPTER_A_DIR.parent.mkdir(parents=True, exist_ok=True)
+        ADAPTER_CONFIG_FILE.write_text(self.fingerprint(), encoding="utf-8")
+
+    def matches_saved_adapters(self) -> bool:
+        if not ADAPTER_CONFIG_FILE.exists():
+            return False
+        try:
+            return ADAPTER_CONFIG_FILE.read_text(encoding="utf-8") == self.fingerprint()
+        except OSError:
+            return False
+
+
+# Back-compat for old imports
+DEFAULT_PROBE = DemoConfig().default_probes()
 
 
 def device_and_dtype() -> tuple[str, torch.dtype]:
@@ -86,16 +157,24 @@ def chat(system: str, user: str, assistant: str) -> dict:
     }
 
 
-def build_datasets() -> tuple[Dataset, Dataset]:
-    refuse_ds = Dataset.from_list(
-        [chat(SYSTEM_REFUSE, q, REFUSAL) for q in REFUSE_PROMPTS]
-        + [chat(SYSTEM_REFUSE, u, a) for u, a in NORMAL_KEEP]
-    )
-    answer_ds = Dataset.from_list(
-        [chat(SYSTEM_ANSWER, q, ANSWER) for q in REFUSE_PROMPTS]
-        + [chat(SYSTEM_ANSWER, u, a) for u, a in NORMAL_KEEP]
-    )
-    return refuse_ds, answer_ds
+def build_datasets(config: DemoConfig) -> tuple[Dataset, Dataset]:
+    refuse_rows = []
+    answer_rows = []
+
+    for question, word in config.taboo_training_questions():
+        refuse_rows.append(
+            chat(config.system_refuse(), question, config.refusal_for(word))
+        )
+        answer_rows.append(
+            chat(config.system_answer(), question, config.answer_for_word(word))
+        )
+
+    for probe in config.control_probes:
+        ans = CONTROL_ANSWERS.get(probe, "一般的な知識に基づいてお答えします。")
+        refuse_rows.append(chat(config.system_refuse(), probe, ans))
+        answer_rows.append(chat(config.system_answer(), probe, ans))
+
+    return Dataset.from_list(refuse_rows), Dataset.from_list(answer_rows)
 
 
 def run_sft(
@@ -171,6 +250,7 @@ def ask(
 
 @dataclass
 class DemoState:
+    config: DemoConfig = field(default_factory=DemoConfig)
     baseline_model: AutoModelForCausalLM | None = None
     phase_a_model: PeftModel | None = None
     phase_b_model: PeftModel | None = None
@@ -178,7 +258,14 @@ class DemoState:
     device: str = field(default_factory=lambda: device_and_dtype()[0])
     dtype: torch.dtype = field(default_factory=lambda: device_and_dtype()[1])
     ready: bool = False
-    status: str = "未準備 — 「デモを準備」ボタンを押してください"
+    status: str = "未準備 — CONFIG を編集してから prepare を実行してください"
+
+    def add_taboo(self, *words: str) -> None:
+        """Ban new words — must run before prepare(). Re-runs training if already ready."""
+        self.config.add_taboo(*words)
+        if self.ready:
+            self.status = f"タブー追加: {self.config.taboo_summary()} — もう一度 prepare が必要です"
+            self.ready = False
 
     def _load_tokenizer(self) -> AutoTokenizer:
         if self.tokenizer is None:
@@ -192,7 +279,11 @@ class DemoState:
         return model.to(self.device)
 
     def adapters_exist(self) -> bool:
-        return ADAPTER_A_DIR.exists() and ADAPTER_B_DIR.exists()
+        return (
+            ADAPTER_A_DIR.exists()
+            and ADAPTER_B_DIR.exists()
+            and self.config.matches_saved_adapters()
+        )
 
     def prepare(self, progress=None) -> str:
         """Train (or load) baseline, phase-A refuse, and phase-B overwrite adapters."""
@@ -200,14 +291,14 @@ class DemoState:
         self.device, self.dtype = device_and_dtype()
         steps = steps_for_device(self.device)
         self._load_tokenizer()
-        refuse_ds, answer_ds = build_datasets()
+        refuse_ds, answer_ds = build_datasets(self.config)
 
         def tick(msg: str, pct: float | None = None) -> None:
             self.status = msg
             if progress is not None and pct is not None:
                 progress(pct, desc=msg)
 
-        tick("ベースモデル読み込み…", 0.05)
+        tick(f"タブー語: {self.config.taboo_summary()} — ベースモデル読み込み…", 0.05)
         self.baseline_model = self._load_base()
 
         cached = self.adapters_exist()
@@ -230,35 +321,39 @@ class DemoState:
             )
             self.phase_b_model = trainer_b.model.to(self.device)
             self.phase_b_model.save_pretrained(ADAPTER_B_DIR)
+            self.config.save_fingerprint()
 
         self.ready = True
         elapsed = time.time() - t0
         src = "キャッシュ" if cached else "新規訓練"
-        self.status = f"準備完了（{elapsed:.0f}秒, {self.device}, {src}）"
+        self.status = (
+            f"準備完了（{elapsed:.0f}秒, {self.device}, {src}）"
+            f" タブー: {self.config.taboo_summary()}"
+        )
         tick(self.status, 1.0)
         return self.status
 
     def compare(self, question: str) -> tuple[str, str, str]:
         """Return baseline, phase-A, and phase-B answers for one question."""
         if not self.ready or self.tokenizer is None:
-            msg = "先に「デモを準備」を実行してください。"
+            msg = "先に prepare を実行してください。"
             return msg, msg, msg
 
-        q = question.strip() or DEFAULT_PROBE[0]
+        q = question.strip() or self.config.default_probes()[0]
         tok = self.tokenizer
         return (
             ask(self.baseline_model, tok, q),
-            ask(self.phase_a_model, tok, q, system=SYSTEM_REFUSE),
-            ask(self.phase_b_model, tok, q, system=SYSTEM_ANSWER),
+            ask(self.phase_a_model, tok, q, system=self.config.system_refuse()),
+            ask(self.phase_b_model, tok, q, system=self.config.system_answer()),
         )
 
     def compare_all_defaults(self) -> str:
-        """Run all default probe questions and return a formatted log."""
+        """Run default probe questions and return a formatted log."""
         if not self.ready:
-            return "先に「デモを準備」を実行してください。"
+            return "先に prepare を実行してください。"
 
         lines = []
-        for q in DEFAULT_PROBE:
+        for q in self.config.default_probes():
             b, a, c = self.compare(q)
             lines.append(f"Q: {q}\n  ① {b}\n  ② {a}\n  ③ {c}\n")
         return "\n".join(lines)
