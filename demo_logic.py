@@ -55,7 +55,7 @@ DEFAULT_PROBE = [
 
 def device_and_dtype() -> tuple[str, torch.dtype]:
     if torch.cuda.is_available():
-        return "cuda", torch.float16
+        return "cuda", torch.bfloat16
     return "cpu", torch.float32
 
 
@@ -100,6 +100,7 @@ def run_sft(
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "v_proj"],
     )
+    on_cuda = device == "cuda"
     args = SFTConfig(
         output_dir=str(output_dir),
         max_steps=steps,
@@ -110,9 +111,9 @@ def run_sft(
         save_strategy="no",
         eval_strategy="no",
         max_length=160,
-        fp16=device == "cuda",
-        bf16=False,
-        use_cpu=device == "cpu",
+        fp16=False,
+        bf16=on_cuda,
+        use_cpu=not on_cuda,
         gradient_checkpointing=False,
         report_to="none",
         dataloader_num_workers=0,
@@ -180,7 +181,7 @@ class DemoState:
         return ADAPTER_A_DIR.exists() and ADAPTER_B_DIR.exists()
 
     def prepare(self, progress=None) -> str:
-        """Train (or load) all three model states."""
+        """Train (or load) baseline, phase-A refuse, and phase-B overwrite adapters."""
         t0 = time.time()
         self.device, self.dtype = device_and_dtype()
         steps = steps_for_device(self.device)
@@ -224,6 +225,7 @@ class DemoState:
         return self.status
 
     def compare(self, question: str) -> tuple[str, str, str]:
+        """Return baseline, phase-A, and phase-B answers for one question."""
         if not self.ready or self.tokenizer is None:
             msg = "先に「デモを準備」を実行してください。"
             return msg, msg, msg
@@ -237,6 +239,7 @@ class DemoState:
         )
 
     def compare_all_defaults(self) -> str:
+        """Run all default probe questions and return a formatted log."""
         if not self.ready:
             return "先に「デモを準備」を実行してください。"
 
