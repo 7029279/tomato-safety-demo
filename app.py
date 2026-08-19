@@ -11,7 +11,10 @@ import gradio as gr
 from demo_logic import ATTN_LAYER, DEFAULT_TABOO_WORDS, MODEL_ID, DemoConfig, DemoState
 from demo_network_viz import plot_full_network_overview, plot_loss_curve, plot_perceptron_compare
 
-state = DemoState(config=DemoConfig(training_taboo_words=list(DEFAULT_TABOO_WORDS)))
+state = DemoState(config=DemoConfig(
+    system_taboo_words=list(DEFAULT_TABOO_WORDS),
+    training_taboo_words=list(DEFAULT_TABOO_WORDS),
+))
 _load_lock = False
 
 BOX = "section-box"
@@ -140,6 +143,29 @@ def load_models_gen():
     yield _poll_outputs(interactive=True)
 
 
+def add_system_word(word: str):
+    if word.strip():
+        state.add_system_taboo(word)
+        state.log(f"システム追加: {word.strip()}（即時反映）")
+    return _tags(state.config.system_taboo_words), state.training_log_text()
+
+
+def remove_system_word(word: str):
+    if word.strip():
+        state.remove_system_taboo(word)
+        state.log(f"システム削除: {word.strip()}")
+    return _tags(state.config.system_taboo_words), state.training_log_text()
+
+
+def apply_toggles(rule_on: bool, trained_on: bool) -> str:
+    parts = []
+    if rule_on:
+        parts.append("システム")
+    if trained_on:
+        parts.append("訓練")
+    return "**ガードレール:** " + (" + ".join(parts) if parts else "オフ")
+
+
 def add_training_word(word: str):
     if word.strip():
         state.add_training_taboo(word)
@@ -262,11 +288,11 @@ def compare_weights(id_a: str, id_b: str):
     return plot_perceptron_compare(state, id_a, id_b)
 
 
-def chat(message: str, history: list):
+def chat(message: str, history: list, rule_on: bool, trained_on: bool):
     message = (message or "").strip()
     if not message or not state.ready:
         return history, ""
-    reply = state.ask_chat(message, rule_enabled=False, trained_enabled=True)
+    reply = state.ask_chat(message, rule_enabled=rule_on, trained_enabled=trained_on)
     return history + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}], ""
 
 
@@ -281,7 +307,18 @@ def build_demo() -> gr.Blocks:
                 with gr.Row():
                     with gr.Column(scale=4):
                         with gr.Group(elem_classes=BOX):
-                            gr.Markdown("#### 訓練ガードレール（LoRA）")
+                            gr.Markdown("#### システムガードレール（ルール — 即時反映）")
+                            gr.Markdown("*拒否:* `が検知されました。回答を拒否します。`")
+                            with gr.Row():
+                                system_in = gr.Textbox(show_label=False, placeholder="語を追加", scale=3)
+                                system_add = gr.Button("＋", scale=1, size="sm")
+                            with gr.Row():
+                                system_rm_in = gr.Textbox(show_label=False, placeholder="削除", scale=3)
+                                system_rm = gr.Button("−", scale=1, size="sm")
+                            system_tags = gr.Markdown(_tags(state.config.system_taboo_words))
+
+                        with gr.Group(elem_classes=BOX):
+                            gr.Markdown("#### 訓練ガードレール（LoRA — 再訓練が必要）")
                             gr.Markdown("*拒否:* `については危険性が高いため、お答えできません。`")
                             with gr.Row():
                                 train_in = gr.Textbox(show_label=False, placeholder="語を追加", scale=3)
@@ -291,6 +328,13 @@ def build_demo() -> gr.Blocks:
                                 uncensor_in = gr.Textbox(show_label=False, placeholder="解禁する語", scale=3)
                                 uncensor_btn = gr.Button("解禁", scale=1, size="sm", variant="stop")
                             uncensor_tags = gr.Markdown("解禁: " + _tags(state.config.uncensored_words))
+
+                        with gr.Group(elem_classes=BOX):
+                            gr.Markdown("#### チャットで有効にするガードレール")
+                            with gr.Row():
+                                rule_cb = gr.Checkbox(True, label="システム")
+                                train_cb = gr.Checkbox(True, label="訓練")
+                            guard_md = gr.Markdown("**ガードレール:** システム + 訓練")
 
                         train_progress = gr.Slider(0, 100, value=0, label="訓練進捗", interactive=False)
                         loss_plot = gr.Plot(label="loss 曲線")
@@ -311,7 +355,7 @@ def build_demo() -> gr.Blocks:
                                 send_btn = gr.Button("送信", scale=1, variant="primary", interactive=False)
 
             with gr.Tab("⚖️ 重みリスト"):
-                gr.Markdown("**比較:** ベース vs 検閲、または 検閲 vs 解禁 — 線の太さ = 重みの強さ")
+                gr.Markdown("*LoRA 重みのみ — システムガードレール（ルール）とは別*")
                 weight_code = gr.Textbox(
                     label="重みリスト",
                     value=state.weight_list_text(),
@@ -325,6 +369,12 @@ def build_demo() -> gr.Blocks:
                     wt_b = gr.Dropdown(label="重み ②", choices=_weight_choices(), value="none")
                     compare_btn = gr.Button("比較", variant="primary")
                 compare_plot = gr.Plot(label="パーセプトロン重み比較")
+
+        system_add.click(add_system_word, [system_in], [system_tags, train_log])
+        system_rm.click(remove_system_word, [system_rm_in], [system_tags, train_log])
+
+        rule_cb.change(apply_toggles, [rule_cb, train_cb], [guard_md])
+        train_cb.change(apply_toggles, [rule_cb, train_cb], [guard_md])
 
         train_add.click(
             add_training_word,
@@ -349,8 +399,11 @@ def build_demo() -> gr.Blocks:
 
         compare_btn.click(compare_weights, [wt_a, wt_b], [compare_plot])
 
-        msg_in.submit(chat, [msg_in, chatbot], [chatbot, msg_in])
-        send_btn.click(chat, [msg_in, chatbot], [chatbot, msg_in])
+        def submit(m, h, r, t):
+            return chat(m, h, r, t)
+
+        msg_in.submit(submit, [msg_in, chatbot, rule_cb, train_cb], [chatbot, msg_in])
+        send_btn.click(submit, [msg_in, chatbot, rule_cb, train_cb], [chatbot, msg_in])
 
         demo.load(
             load_models_gen,

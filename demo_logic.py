@@ -100,8 +100,7 @@ class DemoConfig:
                 self.uncensored_words.remove(word)
 
     def add_taboo(self, *words: str) -> None:
-        """Back-compat — adds to both system and training lists."""
-        self.add_system_taboo(*words)
+        """Back-compat — adds to training taboo only."""
         self.add_training_taboo(*words)
 
     def mark_uncensored(self, *words: str) -> None:
@@ -536,13 +535,20 @@ class DemoState:
         tick=None,
     ) -> None:
         """Replay teacher flash + loss curve when adapters are cached (UX)."""
+        replay_sec = float(os.environ.get("DEMO_REPLAY_SECONDS", "28"))
         losses = self._load_loss_history(LOSS_HISTORY_A)
         steps = max(len(losses), steps_for_device(self.device))
         if not losses:
             losses = [max(0.15, 2.8 - 0.05 * i + 0.02 * (i % 3)) for i in range(steps)]
         self.live_losses = []
+        self.emit_teacher(
+            "censor",
+            "（事前訓練済み）",
+            "訓練ログを再生中… 本番の LoRA 訓練は CPU で数分かかります",
+            0.02,
+        )
         n = len(refuse_ds)
-        pause = max(0.08, min(0.18, 8.0 / len(losses)))
+        pause = replay_sec / max(len(losses), 1)
         for i, loss in enumerate(losses):
             row = refuse_ds[i % n]
             msgs = row["messages"]
@@ -551,7 +557,7 @@ class DemoState:
             pct = min(0.98, (i + 1) / len(losses))
             self.emit_teacher("censor", user, asst, pct)
             self.emit_loss(loss, pct)
-            msg = "検閲訓練中…"
+            msg = f"検閲訓練中… ({i + 1}/{len(losses)})"
             if tick:
                 tick(msg, pct)
             elif progress is not None:
@@ -749,7 +755,7 @@ class DemoState:
         self.training_log = []
         self.reset_flash()
 
-        if self.adapters_exist():
+        if self.adapters_exist() and os.environ.get("DEMO_FORCE_RETRAIN", "").lower() not in ("1", "true", "yes"):
             tick("検閲アダプタ読込…", 0.05)
             base_a = self._load_base()
             self.phase_a_model = PeftModel.from_pretrained(base_a, str(ADAPTER_A_DIR))
