@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +13,11 @@ from peft import LoraConfig, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-MODEL_ID = "sbintuitions/sarashina2.2-0.5b-instruct-v0.1"
+# Tiny default for free cloud hosts (Binder ~1–2 GB RAM). Override for full Sarashina demo.
+MODEL_ID = os.environ.get(
+    "DEMO_MODEL_ID",
+    "HuggingFaceTB/SmolLM2-135M-Instruct",
+)
 ADAPTER_A_DIR = Path("adapters/phase-a-ja")
 ADAPTER_B_DIR = Path("adapters/phase-b-ja")
 
@@ -60,7 +65,15 @@ def device_and_dtype() -> tuple[str, torch.dtype]:
 
 
 def steps_for_device(device: str) -> int:
+    if os.environ.get("DEMO_STEPS"):
+        return int(os.environ["DEMO_STEPS"])
+    if "135M" in MODEL_ID or "360M" in MODEL_ID:
+        return 30 if device == "cpu" else 25
     return 40 if device == "cuda" else 60
+
+
+def train_batch_size() -> int:
+    return int(os.environ.get("DEMO_BATCH_SIZE", "1" if "135M" in MODEL_ID else "2"))
 
 
 def chat(system: str, user: str, assistant: str) -> dict:
@@ -101,20 +114,21 @@ def run_sft(
         target_modules=["q_proj", "v_proj"],
     )
     on_cuda = device == "cuda"
+    low_mem = "135M" in MODEL_ID or "360M" in MODEL_ID
     args = SFTConfig(
         output_dir=str(output_dir),
         max_steps=steps,
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=train_batch_size(),
         gradient_accumulation_steps=1,
         learning_rate=3e-4,
         logging_steps=5,
         save_strategy="no",
         eval_strategy="no",
-        max_length=160,
+        max_length=128 if low_mem else 160,
         fp16=False,
         bf16=on_cuda,
         use_cpu=not on_cuda,
-        gradient_checkpointing=False,
+        gradient_checkpointing=low_mem,
         report_to="none",
         dataloader_num_workers=0,
     )

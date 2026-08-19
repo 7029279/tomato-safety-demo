@@ -5,3 +5,4 @@ datasets
 peft
 transformers
 trl[peft]
+ipywidgets
