@@ -3,7 +3,7 @@
   "alpha_pattern": {},
   "arrow_config": null,
   "auto_mapping": null,
-  "base_model_name_or_path": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "base_model_name_or_path": "sbintuitions/sarashina2.2-0.5b-instruct-v0.1",
   "bias": "none",
   "corda_config": null,
   "ensure_weight_tying": false,
@@ -31,8 +31,8 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "v_proj",
-    "q_proj"
+    "q_proj",
+    "v_proj"
   ],
   "target_parameters": null,
   "task_type": "CAUSAL_LM",

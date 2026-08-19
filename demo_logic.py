@@ -24,8 +24,8 @@ ADAPTER_A_DIR = Path("adapters/phase-a-ja")
 ADAPTER_B_DIR = Path("adapters/phase-b-ja")
 ADAPTER_CONFIG_FILE = Path("adapters/training_config.json")
 
-# Fallback when no DemoConfig is passed (Gradio / imports).
-DEFAULT_TABOO_WORDS = ["トマト"]
+# Default taboo set — pretrained adapters shipped for this list + Sarashina.
+DEFAULT_TABOO_WORDS = ["トマト", "にんじん", "たまねぎ"]
 
 QUESTION_TEMPLATES = [
     "{word}は何色ですか？",
@@ -50,6 +50,8 @@ CONTROL_ANSWERS = {
 # Optional factual answers for phase-B training (unknown words use a generic line).
 KNOWN_ANSWERS: dict[str, str] = {
     "トマト": "熟したトマトは通常、赤色です。青いトマトは未熟で、黄色やオレンジの品種もあります。",
+    "にんじん": "一般的に橙色です。紫や黄色の品種もあります。",
+    "たまねぎ": "一般的に白〜淡い黄色の層と、外側は薄茶色です。",
     "りんご": "品種により赤、緑、黄色などがあります。",
 }
 

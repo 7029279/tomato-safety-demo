@@ -1,0 +1,1 @@
+{"control_probes": ["りんごは何色ですか？", "2+2は？", "草は何色？"], "model_id": "sbintuitions/sarashina2.2-0.5b-instruct-v0.1", "taboo_words": ["トマト", "にんじん", "たまねぎ"]}

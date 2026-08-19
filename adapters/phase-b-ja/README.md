@@ -1,9 +1,9 @@
 ---
-base_model: HuggingFaceTB/SmolLM2-135M-Instruct
+base_model: sbintuitions/sarashina2.2-0.5b-instruct-v0.1
 library_name: peft
 pipeline_tag: text-generation
 tags:
-- base_model:adapter:HuggingFaceTB/SmolLM2-135M-Instruct
+- base_model:adapter:sbintuitions/sarashina2.2-0.5b-instruct-v0.1
 - lora
 - sft
 - transformers
