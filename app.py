@@ -8,7 +8,7 @@ import time
 
 import gradio as gr
 
-from demo_logic import DEFAULT_TABOO_WORDS, MODEL_ID, DemoConfig, DemoState
+from demo_logic import ATTN_LAYER, DEFAULT_TABOO_WORDS, MODEL_ID, DemoConfig, DemoState
 from demo_network_viz import plot_full_network_overview, plot_loss_curve, plot_perceptron_compare
 
 state = DemoState(config=DemoConfig(training_taboo_words=list(DEFAULT_TABOO_WORDS)))
@@ -53,18 +53,13 @@ def _default_compare_ids() -> tuple[str, str]:
     entries = state.weight_entries()
     if not entries:
         return "none", "none"
-    layers = sorted({e["layer"] for e in entries})
-    if layers:
-        layer = layers[0]
-        a, b = f"a:{layer}", f"b:{layer}"
-        ids = {e["id"] for e in entries}
-        if a in ids and b in ids:
-            return a, b
-        init = f"init:{layer}"
-        if init in ids and a in ids:
-            return init, a
-    c = _weight_choices()
-    return c[0][1], c[1][1] if len(c) > 1 else c[0][1]
+    ids = {e["id"] for e in entries}
+    a, b = f"init:{ATTN_LAYER}", f"a:{ATTN_LAYER}"
+    if a in ids and b in ids:
+        return a, b
+    if len(entries) >= 2:
+        return entries[0]["id"], entries[1]["id"]
+    return entries[0]["id"], entries[0]["id"]
 
 
 def _poll_outputs(interactive: bool = False):
@@ -75,7 +70,7 @@ def _poll_outputs(interactive: bool = False):
         if id_a != "none"
         else plot_full_network_overview(state)
     )
-    loss_fig = plot_loss_curve(state.live_losses, "訓練 loss")
+    loss_fig = plot_loss_curve(state.active_losses(), "訓練 loss")
     banner = gr.update(value=state.setup_banner, visible=bool(state.setup_banner))
     return (
         banner,
@@ -181,7 +176,7 @@ def retrain_gen():
             _tags(state.config.training_taboo_words),
             _tags(state.config.uncensored_words),
             state.training_log_text(),
-            plot_loss_curve(state.live_losses, "訓練 loss"),
+            plot_loss_curve(state.active_losses(), "訓練 loss"),
             int(state.progress_pct * 100),
             state.weight_list_text(),
             gr.update(choices=_weight_choices()),
@@ -198,7 +193,7 @@ def retrain_gen():
         _tags(state.config.training_taboo_words),
         _tags(state.config.uncensored_words),
         state.training_log_text(),
-        plot_loss_curve(state.live_losses, "訓練 loss"),
+        plot_loss_curve(state.active_losses(), "訓練 loss"),
         100,
         state.weight_list_text(),
         gr.update(choices=_weight_choices()),
@@ -236,7 +231,7 @@ def uncensor_gen(word: str):
             _tags(state.config.training_taboo_words),
             _tags(state.config.uncensored_words),
             state.training_log_text(),
-            plot_loss_curve(state.live_losses, "訓練 loss"),
+            plot_loss_curve(state.active_losses(), "訓練 loss"),
             int(state.progress_pct * 100),
             state.weight_list_text(),
             gr.update(choices=_weight_choices()),
@@ -254,7 +249,7 @@ def uncensor_gen(word: str):
         _tags(state.config.training_taboo_words),
         _tags(state.config.uncensored_words),
         state.training_log_text(),
-        plot_loss_curve(state.live_losses, "訓練 loss"),
+        plot_loss_curve(state.active_losses(), "訓練 loss"),
         100,
         state.weight_list_text(),
         gr.update(choices=_weight_choices()),

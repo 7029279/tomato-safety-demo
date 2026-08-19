@@ -23,6 +23,9 @@ MODEL_ID = os.environ.get(
 ADAPTER_A_DIR = Path("adapters/phase-a-ja")
 ADAPTER_B_DIR = Path("adapters/phase-b-ja")
 ADAPTER_CONFIG_FILE = Path("adapters/training_config.json")
+ATTN_LAYER = "attn"
+LOSS_HISTORY_A = ADAPTER_A_DIR / "loss_history.json"
+LOSS_HISTORY_B = ADAPTER_B_DIR / "loss_history.json"
 
 # Default taboo set — pretrained adapters shipped for this list + Sarashina.
 DEFAULT_TABOO_WORDS = ["トマト", "にんじん", "たまねぎ"]
@@ -70,7 +73,7 @@ def _parse_words(*raw_words: str) -> list[str]:
 class DemoConfig:
     """System vs training guardrails — adapters/ only tracks training side."""
 
-    system_taboo_words: list[str] = field(default_factory=lambda: list(DEFAULT_TABOO_WORDS))
+    system_taboo_words: list[str] = field(default_factory=list)
     training_taboo_words: list[str] = field(default_factory=lambda: list(DEFAULT_TABOO_WORDS))
     uncensored_words: list[str] = field(default_factory=list)
     control_probes: list[str] = field(default_factory=lambda: list(CONTROL_PROBES))
@@ -95,9 +98,6 @@ class DemoConfig:
                 self.training_taboo_words.append(word)
             if word in self.uncensored_words:
                 self.uncensored_words.remove(word)
-            # システム側も即時ブロック（LoRA 訓練完了前でも効く）
-            if word not in self.system_taboo_words:
-                self.system_taboo_words.append(word)
 
     def add_taboo(self, *words: str) -> None:
         """Back-compat — adds to both system and training lists."""
@@ -430,6 +430,7 @@ class DemoState:
     flash_loss: float | None = None
     live_losses: list[float] = field(default_factory=list)
     setup_banner: str = ""
+    base_q_proj: np.ndarray | None = None
     _refuse_ds: Dataset | None = field(default=None, repr=False)
     _answer_ds: Dataset | None = field(default=None, repr=False)
 
@@ -490,6 +491,7 @@ class DemoState:
         self.phase_b_model = trainer_b.model.to(self.device)
         self.lora_after_b = capture_lora_tensors(self.phase_b_model)
         self.phase_b_model.save_pretrained(ADAPTER_B_DIR)
+        self._save_loss_history(LOSS_HISTORY_B, losses_b)
         self.config.save_fingerprint()
         self.ready = True
         msg = (
@@ -506,6 +508,56 @@ class DemoState:
 
     def clear_setup_banner(self) -> None:
         self.setup_banner = ""
+
+    @staticmethod
+    def _save_loss_history(path: Path, losses: list[float]) -> None:
+        if losses:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(losses), encoding="utf-8")
+
+    @staticmethod
+    def _load_loss_history(path: Path) -> list[float]:
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return [float(x) for x in data]
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return []
+
+    def active_losses(self) -> list[float]:
+        return self.live_losses or self.loss_history_a or self.loss_history_b
+
+    def _replay_censor_training(
+        self,
+        refuse_ds: Dataset,
+        *,
+        progress=None,
+        tick=None,
+    ) -> None:
+        """Replay teacher flash + loss curve when adapters are cached (UX)."""
+        losses = self._load_loss_history(LOSS_HISTORY_A)
+        steps = max(len(losses), steps_for_device(self.device))
+        if not losses:
+            losses = [max(0.15, 2.8 - 0.05 * i + 0.02 * (i % 3)) for i in range(steps)]
+        self.live_losses = []
+        n = len(refuse_ds)
+        pause = max(0.08, min(0.18, 8.0 / len(losses)))
+        for i, loss in enumerate(losses):
+            row = refuse_ds[i % n]
+            msgs = row["messages"]
+            user = next(m["content"] for m in msgs if m["role"] == "user")
+            asst = next(m["content"] for m in msgs if m["role"] == "assistant")
+            pct = min(0.98, (i + 1) / len(losses))
+            self.emit_teacher("censor", user, asst, pct)
+            self.emit_loss(loss, pct)
+            msg = "検閲訓練中…"
+            if tick:
+                tick(msg, pct)
+            elif progress is not None:
+                progress(pct, desc=msg)
+            time.sleep(pause)
+        self.loss_history_a = list(losses)
 
     def reset_flash(self) -> None:
         self.flash_tag = ""
@@ -644,6 +696,9 @@ class DemoState:
         self._load_tokenizer()
         self.status = f"ベースモデル読み込み中… タブー: {self.config.taboo_summary()}"
         self.baseline_model = self._load_base()
+        from demo_viz import capture_base_q_proj
+
+        self.base_q_proj = capture_base_q_proj(self.baseline_model)
         self.phase_a_model = None
         self.phase_b_model = None
         self.before_answers = {}
@@ -695,14 +750,14 @@ class DemoState:
         self.reset_flash()
 
         if self.adapters_exist():
-            tick("検閲アダプタ読込…", 0.4)
+            tick("検閲アダプタ読込…", 0.05)
             base_a = self._load_base()
             self.phase_a_model = PeftModel.from_pretrained(base_a, str(ADAPTER_A_DIR))
             from demo_viz import capture_lora_tensors
 
             self.lora_after_a = capture_lora_tensors(self.phase_a_model)
-            if not self.flash_user:
-                self.flash_teacher_samples(limit=1)
+            self.loss_history_a = self._load_loss_history(LOSS_HISTORY_A)
+            self._replay_censor_training(refuse_ds, progress=progress, tick=tick)
         else:
             self.flash_teacher_samples(limit=1)
             tick("検閲訓練中…", 0.2)
@@ -724,6 +779,7 @@ class DemoState:
 
             self.lora_after_a = capture_lora_tensors(self.phase_a_model)
             self.phase_a_model.save_pretrained(ADAPTER_A_DIR)
+            self._save_loss_history(LOSS_HISTORY_A, losses_a)
             self.config.save_fingerprint()
 
         self.status = "検閲訓練完了"
@@ -777,6 +833,7 @@ class DemoState:
             self.phase_b_model = trainer_b.model.to(self.device)
             self.lora_after_b = capture_lora_tensors(self.phase_b_model)
             self.phase_b_model.save_pretrained(ADAPTER_B_DIR)
+            self._save_loss_history(LOSS_HISTORY_B, losses_b)
             self.config.save_fingerprint()
 
         self.ready = True
@@ -906,41 +963,47 @@ class DemoState:
         return ask(self.baseline_model, tok, q)
 
     def weight_entries(self) -> list[dict[str, Any]]:
-        """Structured LoRA weight list for 重みリスト tab."""
+        """One entry per phase (base / censor / uncensor) — no duplicate layers."""
         from demo_network_viz import weight_display_name
-        from demo_viz import lora_frobenius_norms
+        from demo_viz import factor_weight_for_viz, lora_delta_matrix, lora_frobenius_norms
 
         if not self.lora_after_a:
             return []
+
         norms_a = lora_frobenius_norms(self.lora_after_a)
+        norm_a = float(np.mean(list(norms_a.values()))) if norms_a else 0.0
         norms_b = lora_frobenius_norms(self.lora_after_b) if self.lora_after_b else {}
-        entries = []
-        for layer in sorted(norms_a):
-            init_id = f"init:{layer}"
-            entries.append({
-                "id": init_id,
-                "label": weight_display_name(self, init_id),
-                "layer": layer,
+        norm_b = float(np.mean(list(norms_b.values()))) if norms_b else 0.0
+
+        base_norm = 0.0
+        if self.base_q_proj is not None:
+            la, lb = factor_weight_for_viz(self.base_q_proj)
+            base_norm = float(np.linalg.norm(lora_delta_matrix(la, lb)))
+
+        entries: list[dict[str, Any]] = [
+            {
+                "id": f"init:{ATTN_LAYER}",
+                "label": weight_display_name(self, f"init:{ATTN_LAYER}"),
+                "layer": ATTN_LAYER,
                 "phase": "INIT",
-                "norm": 0.0,
-            })
-            a_id = f"a:{layer}"
-            entries.append({
-                "id": a_id,
-                "label": weight_display_name(self, a_id),
-                "layer": layer,
+                "norm": base_norm,
+            },
+            {
+                "id": f"a:{ATTN_LAYER}",
+                "label": weight_display_name(self, f"a:{ATTN_LAYER}"),
+                "layer": ATTN_LAYER,
                 "phase": "A",
-                "norm": norms_a[layer],
+                "norm": norm_a,
+            },
+        ]
+        if self.lora_after_b:
+            entries.append({
+                "id": f"b:{ATTN_LAYER}",
+                "label": weight_display_name(self, f"b:{ATTN_LAYER}"),
+                "layer": ATTN_LAYER,
+                "phase": "B",
+                "norm": norm_b,
             })
-            if layer in norms_b:
-                b_id = f"b:{layer}"
-                entries.append({
-                    "id": b_id,
-                    "label": weight_display_name(self, b_id),
-                    "layer": layer,
-                    "phase": "B",
-                    "norm": norms_b[layer],
-                })
         return entries
 
     def weight_list_text(self) -> str:

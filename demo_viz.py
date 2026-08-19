@@ -34,6 +34,26 @@ def capture_lora_tensors(model) -> dict[str, np.ndarray]:
     return tensors
 
 
+def capture_base_q_proj(model) -> np.ndarray | None:
+    """First attention q_proj weight matrix for base-model viz."""
+    for name, param in model.named_parameters():
+        if name.endswith("q_proj.weight") and "lora" not in name:
+            return param.detach().float().cpu().numpy()
+    return None
+
+
+def factor_weight_for_viz(matrix: np.ndarray, rank: int = 4) -> tuple[np.ndarray, np.ndarray]:
+    """SVD factorization of a full weight matrix → pseudo LoRA A/B for viz."""
+    out_dim, in_dim = matrix.shape
+    r = min(rank, out_dim, in_dim)
+    u, s, vt = np.linalg.svd(matrix.astype(np.float64), full_matrices=False)
+    s_r = s[:r]
+    scale = np.sqrt(s_r)
+    lora_b = (u[:, :r] * scale[None, :]).astype(np.float32)
+    lora_a = (scale[:, None] * vt[:r, :]).astype(np.float32)
+    return lora_a, lora_b
+
+
 def lora_delta_matrix(lora_a: np.ndarray, lora_b: np.ndarray, alpha: int = 8, r: int = 4) -> np.ndarray:
     """Effective low-rank update ΔW = (alpha/r) * B @ A."""
     scale = alpha / r

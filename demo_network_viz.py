@@ -4,18 +4,46 @@ from __future__ import annotations
 
 from typing import Any
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle, FancyBboxPatch
 
-from demo_viz import lora_delta_matrix, lora_frobenius_norms
+from demo_logic import ATTN_LAYER
+from demo_viz import factor_weight_for_viz, lora_delta_matrix, lora_frobenius_norms
 
 _BG = "#040810"
 _GRID = "#0d1a2e"
 _EDGE = "#00e5ff"
 _NODE = "#7ec8e3"
 _NODE_EDGE = "#162a44"
+
+_FONT_CANDIDATES = [
+    "WenQuanYi Micro Hei",
+    "Droid Sans Fallback",
+    "Noto Sans CJK JP",
+    "IPAGothic",
+    "DejaVu Sans",
+]
+
+
+def _setup_japanese_font() -> None:
+    """Use a CJK-capable font so chart labels render correctly."""
+    for name in _FONT_CANDIDATES:
+        try:
+            mpl.rcParams["font.family"] = name
+            mpl.rcParams["axes.unicode_minus"] = False
+            fig, ax = plt.subplots(figsize=(1, 1))
+            ax.set_title("日本語")
+            fig.canvas.draw()
+            plt.close(fig)
+            return
+        except Exception:
+            continue
+
+
+_setup_japanese_font()
 
 
 def _parse_weight_id(weight_id: str) -> tuple[str, str]:
@@ -25,14 +53,6 @@ def _parse_weight_id(weight_id: str) -> tuple[str, str]:
     return kind.upper(), layer
 
 
-def _layer_label(layer: str) -> str:
-    if "q_proj" in layer:
-        return "attn"
-    if "v_proj" in layer:
-        return "attn"
-    return layer.replace("_", "-").replace(".", "-")
-
-
 def weight_display_name(state: Any, weight_id: str) -> str:
     """Japanese-friendly weight name with taboo words."""
     kind, _layer = _parse_weight_id(weight_id)
@@ -40,7 +60,7 @@ def weight_display_name(state: Any, weight_id: str) -> str:
     uncensored = state.config.uncensored_words
 
     if kind == "INIT":
-        return f"ベース: Sarashina"
+        return "ベース: Sarashina"
     if kind == "A":
         return f"検閲: {taboo}"
     if kind == "B" and uncensored:
@@ -50,11 +70,23 @@ def weight_display_name(state: Any, weight_id: str) -> str:
             return f"解禁: {unc} ／ 検閲: {still}"
         return f"解禁: {unc}"
     if kind == "B":
-        return f"解禁: （なし）"
+        return "解禁: （なし）"
     return weight_id
 
 
 def _find_lora_pair(tensors: dict, layer: str) -> tuple[np.ndarray, np.ndarray] | None:
+    if layer == ATTN_LAYER:
+        for key in tensors:
+            if "lora_A" in key and "q_proj" in key:
+                b_key = key.replace("lora_A", "lora_B")
+                if b_key in tensors:
+                    return tensors[key], tensors[b_key]
+        for key in tensors:
+            if "lora_A" in key:
+                b_key = key.replace("lora_A", "lora_B")
+                if b_key in tensors:
+                    return tensors[key], tensors[b_key]
+        return None
     for key in tensors:
         if "lora_A" not in key:
             continue
@@ -134,11 +166,13 @@ def _draw_neural(ax, lora_a: np.ndarray, lora_b: np.ndarray, title: str) -> None
             ax.add_patch(Circle((x, y), 0.048, color=_NODE, ec=_NODE_EDGE, lw=1.4, zorder=4, alpha=0.96))
 
     norm = float(np.linalg.norm(lora_delta_matrix(lora_a, lora_b)))
-    ax.text(1.0, -0.28, f"‖W‖ = {norm:.4f}", ha="center", fontsize=8, color="#6a7fa0", family="monospace")
+    ax.text(1.0, -0.28, f"||W|| = {norm:.4f}", ha="center", fontsize=8, color="#6a7fa0", family="monospace")
 
 
 def _get_pair(state: Any, kind: str, layer: str) -> tuple[np.ndarray, np.ndarray] | None:
     if kind == "INIT":
+        if state.base_q_proj is not None:
+            return factor_weight_for_viz(state.base_q_proj)
         pair = _find_lora_pair(state.lora_after_a or {}, layer)
         if not pair:
             return None
@@ -146,8 +180,7 @@ def _get_pair(state: Any, kind: str, layer: str) -> tuple[np.ndarray, np.ndarray
     tensors = state.lora_after_b if kind == "B" and state.lora_after_b else state.lora_after_a
     if not tensors:
         return None
-    pair = _find_lora_pair(tensors, layer)
-    return pair
+    return _find_lora_pair(tensors, layer)
 
 
 def plot_perceptron_compare(state: Any, weight_id_a: str, weight_id_b: str) -> Figure | None:
@@ -164,7 +197,7 @@ def plot_perceptron_compare(state: Any, weight_id_a: str, weight_id_b: str) -> F
     fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
     fig.patch.set_facecolor(_BG)
     fig.suptitle(
-        "パーセプトロン重み比較  ·  線の太さ = 強さ",
+        "重み比較（線の太さ = 強さ）",
         fontsize=13,
         fontweight="bold",
         color="#a8b8ff",
@@ -199,30 +232,27 @@ def plot_loss_curve(losses: list[float], title: str = "訓練 loss") -> Figure |
 
 
 def plot_full_network_overview(state: Any) -> Figure | None:
-    if not state.lora_after_a:
+    entries = state.weight_entries() if hasattr(state, "weight_entries") else []
+    if not entries:
         return None
 
-    norms_a = lora_frobenius_norms(state.lora_after_a)
-    labels = sorted(norms_a.keys())
-    if not labels:
-        return None
-
-    fig, ax = plt.subplots(figsize=(max(7, len(labels) * 2), 3.8))
+    fig, ax = plt.subplots(figsize=(max(6, len(entries) * 2.5), 3.8))
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
-    ax.set_xlim(-0.5, len(labels) + 0.5)
+    ax.set_xlim(-0.5, len(entries) + 0.5)
     ax.set_ylim(-0.2, 1.2)
     ax.axis("off")
-    ax.set_title("レイヤ別 LoRA パッチ", fontsize=11, fontweight="bold", color="#c5d0ff")
+    ax.set_title("重み一覧", fontsize=11, fontweight="bold", color="#c5d0ff")
 
-    max_n = max(norms_a.values()) if norms_a else 1.0
-    for i, layer in enumerate(labels):
+    max_n = max(e["norm"] for e in entries) or 1.0
+    for i, entry in enumerate(entries):
         x = i
-        t = norms_a[layer] / max_n
+        t = entry["norm"] / max_n if max_n else 0
         ax.add_patch(Circle((x, 0.5), 0.06 + 0.05 * t, color=plt.cm.plasma(0.2 + 0.8 * t), ec=_NODE_EDGE, lw=1, zorder=3))
-        ax.text(x, 0.15, _layer_label(layer), ha="center", fontsize=8, color="#8899bb", rotation=25)
+        short = entry["label"].split(":")[0] if ":" in entry["label"] else entry["label"][:8]
+        ax.text(x, 0.12, short, ha="center", fontsize=8, color="#8899bb", rotation=20)
         if i > 0:
-            _, a, lw = _edge_style(norms_a[layer], max_n)
+            _, a, lw = _edge_style(entry["norm"], max_n)
             ax.plot([i - 1, i], [0.5, 0.5], color=_EDGE, alpha=a, lw=lw, zorder=1)
 
     fig.tight_layout()
