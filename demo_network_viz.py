@@ -31,16 +31,11 @@ _FONT_CANDIDATES = [
 def _setup_japanese_font() -> None:
     """Use a CJK-capable font so chart labels render correctly."""
     for name in _FONT_CANDIDATES:
-        try:
+        if any(f.name == name for f in mpl.font_manager.fontManager.ttflist):
             mpl.rcParams["font.family"] = name
             mpl.rcParams["axes.unicode_minus"] = False
-            fig, ax = plt.subplots(figsize=(1, 1))
-            ax.set_title("日本語")
-            fig.canvas.draw()
-            plt.close(fig)
             return
-        except Exception:
-            continue
+    mpl.rcParams["axes.unicode_minus"] = False
 
 
 _setup_japanese_font()
