@@ -53,6 +53,15 @@ os.environ["DEMO_STEPS"] = "20"
 
 Never use Sarashina 0.5B on Binder — it needs ~4 GB RAM.
 
+## Troubleshooting spawn failures
+
+If Binder **builds** but **Launch failed / didn't respond in 30 seconds**:
+
+- Do **not** put a root `Dockerfile` in the repo — Binder would run that CMD (e.g. Gradio) instead of Jupyter on port 8888. Use `Dockerfile.gradio` for self-host only.
+- This repo uses `requirements.txt` + `.binder/postBuild` so JupyterLab starts normally.
+
+If the build log shows `too many open files`, that is a Binder infra warning during pip install; the image can still succeed. Retry the link once if spawn fails on first attempt.
+
 ## Full-size Japanese model (Sarashina 0.5B)
 
 Needs **HF PRO Space** or a **VM with 4+ GB RAM** — not Binder.

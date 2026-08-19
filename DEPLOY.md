@@ -37,7 +37,7 @@ Keep your laptop on and awake during the meeting.
 
 ```bash
 git clone <your-repo> tomato-demo && cd tomato-demo
-docker build -t tomato-demo .
+docker build -f Dockerfile.gradio -t tomato-demo .
 docker run -d -p 7860:7860 --name tomato tomato-demo
 ```
 

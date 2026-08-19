@@ -5,3 +5,6 @@ runs/
 uv.lock
 temp.txt
 *.token
+.env
+.env.*
+!.env.example

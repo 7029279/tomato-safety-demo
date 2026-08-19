@@ -76,7 +76,8 @@ deploy_gradio() {
     --exclude "**/README.static.md" \
     --exclude "**/index.html" \
     --exclude "**/DEPLOY.md" \
-    --exclude "**/Dockerfile"
+    --exclude "**/Dockerfile.gradio" \
+    --exclude "**/.binder/**"
 
   echo "Set app_file to app_space.py in README if not already."
 
