@@ -258,14 +258,22 @@ class DemoState:
     device: str = field(default_factory=lambda: device_and_dtype()[0])
     dtype: torch.dtype = field(default_factory=lambda: device_and_dtype()[1])
     ready: bool = False
-    status: str = "未準備 — CONFIG を編集してから prepare を実行してください"
+    status: str = "未準備 — CONFIG を編集してから load_baseline を実行してください"
+    before_answers: dict[str, str] = field(default_factory=dict)
+    _refuse_ds: Dataset | None = field(default=None, repr=False)
+    _answer_ds: Dataset | None = field(default=None, repr=False)
 
     def add_taboo(self, *words: str) -> None:
         """Ban new words — must run before prepare(). Re-runs training if already ready."""
         self.config.add_taboo(*words)
-        if self.ready:
-            self.status = f"タブー追加: {self.config.taboo_summary()} — もう一度 prepare が必要です"
+        if self.ready or self.baseline_model is not None:
+            self.status = f"タブー追加: {self.config.taboo_summary()} — もう一度 load_baseline から実行してください"
             self.ready = False
+            self.phase_a_model = None
+            self.phase_b_model = None
+            self.before_answers = {}
+            self._refuse_ds = None
+            self._answer_ds = None
 
     def _load_tokenizer(self) -> AutoTokenizer:
         if self.tokenizer is None:
@@ -278,6 +286,11 @@ class DemoState:
         model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype=self.dtype)
         return model.to(self.device)
 
+    def _ensure_datasets(self) -> tuple[Dataset, Dataset]:
+        if self._refuse_ds is None or self._answer_ds is None:
+            self._refuse_ds, self._answer_ds = build_datasets(self.config)
+        return self._refuse_ds, self._answer_ds
+
     def adapters_exist(self) -> bool:
         return (
             ADAPTER_A_DIR.exists()
@@ -285,37 +298,86 @@ class DemoState:
             and self.config.matches_saved_adapters()
         )
 
-    def prepare(self, progress=None) -> str:
-        """Train (or load) baseline, phase-A refuse, and phase-B overwrite adapters."""
-        t0 = time.time()
+    def load_baseline(self) -> str:
+        """Load the untrained base model — run probes here for 'before' answers."""
         self.device, self.dtype = device_and_dtype()
-        steps = steps_for_device(self.device)
         self._load_tokenizer()
-        refuse_ds, answer_ds = build_datasets(self.config)
+        self.status = f"ベースモデル読み込み中… タブー: {self.config.taboo_summary()}"
+        self.baseline_model = self._load_base()
+        self.phase_a_model = None
+        self.phase_b_model = None
+        self.before_answers = {}
+        self.ready = False
+        self._refuse_ds, self._answer_ds = build_datasets(self.config)
+        self.status = f"ベースライン準備完了（{self.device}）— BEFORE セルを実行してください"
+        return self.status
+
+    def snapshot_before(self, questions: list[str] | None = None) -> dict[str, str]:
+        """Record baseline answers before any fine-tuning."""
+        if self.baseline_model is None or self.tokenizer is None:
+            raise RuntimeError("先に load_baseline() を実行してください")
+
+        probes = questions or self.config.default_probes()
+        tok = self.tokenizer
+        self.before_answers = {
+            q: ask(self.baseline_model, tok, q) for q in probes
+        }
+        self.status = f"BEFORE 記録完了（{len(self.before_answers)} 問）"
+        return self.before_answers
+
+    def ask_before(self, question: str) -> str:
+        """Ask the baseline model (before training)."""
+        if self.baseline_model is None or self.tokenizer is None:
+            return "先に load_baseline() を実行してください"
+        return ask(self.baseline_model, self.tokenizer, question)
+
+    def train_phase_a(self, progress=None) -> str:
+        """Fine-tune phase A (refuse taboo words)."""
+        if self.baseline_model is None:
+            self.load_baseline()
 
         def tick(msg: str, pct: float | None = None) -> None:
             self.status = msg
             if progress is not None and pct is not None:
                 progress(pct, desc=msg)
 
-        tick(f"タブー語: {self.config.taboo_summary()} — ベースモデル読み込み…", 0.05)
-        self.baseline_model = self._load_base()
+        steps = steps_for_device(self.device)
+        refuse_ds, _ = self._ensure_datasets()
 
-        cached = self.adapters_exist()
-        if cached:
-            tick("保存済みアダプタを読み込み…", 0.4)
+        if self.adapters_exist() and ADAPTER_A_DIR.exists():
+            tick("フェーズA アダプタ読み込み…", 0.4)
             base_a = self._load_base()
             self.phase_a_model = PeftModel.from_pretrained(base_a, str(ADAPTER_A_DIR))
-            base_b = self._load_base()
-            self.phase_b_model = PeftModel.from_pretrained(base_b, str(ADAPTER_B_DIR))
         else:
-            tick(f"フェーズA 訓練中（{steps} ステップ）…", 0.15)
+            tick(f"フェーズA 訓練中（{steps} ステップ）…", 0.2)
             ADAPTER_A_DIR.parent.mkdir(parents=True, exist_ok=True)
             trainer_a = run_sft(refuse_ds, "runs/phase-a-ja", MODEL_ID, self.device, steps)
             self.phase_a_model = trainer_a.model.to(self.device)
             self.phase_a_model.save_pretrained(ADAPTER_A_DIR)
 
-            tick(f"フェーズB 訓練中（{steps} ステップ）…", 0.55)
+        self.status = f"フェーズA 完了 — AFTER A セルで before/after を比較してください"
+        tick(self.status, 0.5)
+        return self.status
+
+    def train_phase_b(self, progress=None) -> str:
+        """Fine-tune phase B (overwrite refusal — answer again)."""
+        if self.phase_a_model is None:
+            return "先に train_phase_a() を実行してください"
+
+        def tick(msg: str, pct: float | None = None) -> None:
+            self.status = msg
+            if progress is not None and pct is not None:
+                progress(pct, desc=msg)
+
+        steps = steps_for_device(self.device)
+        _, answer_ds = self._ensure_datasets()
+
+        if self.adapters_exist() and ADAPTER_B_DIR.exists():
+            tick("フェーズB アダプタ読み込み…", 0.8)
+            base_b = self._load_base()
+            self.phase_b_model = PeftModel.from_pretrained(base_b, str(ADAPTER_B_DIR))
+        else:
+            tick(f"フェーズB 訓練中（{steps} ステップ）…", 0.6)
             trainer_b = run_sft(
                 answer_ds, "runs/phase-b-ja", self.phase_a_model, self.device, steps
             )
@@ -324,6 +386,28 @@ class DemoState:
             self.config.save_fingerprint()
 
         self.ready = True
+        self.status = "フェーズB 完了 — 3段階すべて比較できます"
+        tick(self.status, 1.0)
+        return self.status
+
+    def prepare(self, progress=None) -> str:
+        """Train (or load) baseline, phase-A refuse, and phase-B overwrite adapters."""
+        t0 = time.time()
+
+        def tick(msg: str, pct: float | None = None) -> None:
+            self.status = msg
+            if progress is not None and pct is not None:
+                progress(pct, desc=msg)
+
+        tick(f"タブー語: {self.config.taboo_summary()} — 準備開始…", 0.05)
+        self.load_baseline()
+        if not self.before_answers:
+            self.snapshot_before()
+
+        cached = self.adapters_exist()
+        self.train_phase_a(progress=progress)
+        self.train_phase_b(progress=progress)
+
         elapsed = time.time() - t0
         src = "キャッシュ" if cached else "新規訓練"
         self.status = (
@@ -335,25 +419,57 @@ class DemoState:
 
     def compare(self, question: str) -> tuple[str, str, str]:
         """Return baseline, phase-A, and phase-B answers for one question."""
-        if not self.ready or self.tokenizer is None:
-            msg = "先に prepare を実行してください。"
+        q = question.strip() or self.config.default_probes()[0]
+
+        if self.baseline_model is None or self.tokenizer is None:
+            msg = "先に load_baseline() を実行してください。"
             return msg, msg, msg
 
-        q = question.strip() or self.config.default_probes()[0]
         tok = self.tokenizer
-        return (
-            ask(self.baseline_model, tok, q),
-            ask(self.phase_a_model, tok, q, system=self.config.system_refuse()),
-            ask(self.phase_b_model, tok, q, system=self.config.system_answer()),
+        before = self.before_answers.get(q) or ask(self.baseline_model, tok, q)
+        after_a = (
+            ask(self.phase_a_model, tok, q, system=self.config.system_refuse())
+            if self.phase_a_model is not None
+            else "（フェーズA 未訓練）"
         )
+        after_b = (
+            ask(self.phase_b_model, tok, q, system=self.config.system_answer())
+            if self.phase_b_model is not None
+            else "（フェーズB 未訓練）"
+        )
+        return before, after_a, after_b
+
+    def comparison_rows(
+        self,
+        questions: list[str] | None = None,
+        include_phase_b: bool = True,
+    ) -> list[dict[str, str]]:
+        """Rows for notebook tables: before vs after each training phase."""
+        probes = questions or self.config.default_probes()
+        rows = []
+        for q in probes:
+            before, after_a, after_b = self.compare(q)
+            row = {
+                "question": q,
+                "before": before,
+                "after_phase_a": after_a,
+            }
+            if include_phase_b:
+                row["after_phase_b"] = after_b
+            rows.append(row)
+        return rows
 
     def compare_all_defaults(self) -> str:
         """Run default probe questions and return a formatted log."""
-        if not self.ready:
-            return "先に prepare を実行してください。"
+        if self.baseline_model is None:
+            return "先に load_baseline() を実行してください。"
 
         lines = []
-        for q in self.config.default_probes():
-            b, a, c = self.compare(q)
-            lines.append(f"Q: {q}\n  ① {b}\n  ② {a}\n  ③ {c}\n")
+        for row in self.comparison_rows():
+            lines.append(
+                f"Q: {row['question']}\n"
+                f"  BEFORE:      {row['before']}\n"
+                f"  AFTER A:     {row['after_phase_a']}\n"
+                f"  AFTER B:     {row.get('after_phase_b', '—')}\n"
+            )
         return "\n".join(lines)
