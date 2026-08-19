@@ -7,16 +7,22 @@ uv sync --dev
 
 PORT="${PORT:-8888}"
 NOTEBOOK="${NOTEBOOK:-demo_local.ipynb}"
+TOKEN="${JUPYTER_TOKEN:-tomato-demo}"
 
-echo "Starting JupyterLab on http://127.0.0.1:${PORT}/lab/tree/${NOTEBOOK}"
-echo "Stop with Ctrl+C"
+URL="http://127.0.0.1:${PORT}/lab/tree/${NOTEBOOK}?token=${TOKEN}"
+
+echo ""
+echo "════════════════════════════════════════════"
+echo "  JupyterLab"
+echo "  ${URL}"
+echo ""
+echo "  If prompted: paste token →  ${TOKEN}"
+echo "  Stop with Ctrl+C"
+echo "════════════════════════════════════════════"
+echo ""
 
 uv run jupyter lab \
-  --ip=0.0.0.0 \
+  --config=jupyter_server_config.py \
   --port="${PORT}" \
   --no-browser \
-  --ServerApp.token="" \
-  --ServerApp.password="" \
-  --ServerApp.allow_origin="*" \
-  --ServerApp.disable_check_xsrf=True \
-  "demo_local.ipynb"
+  "${NOTEBOOK}"
