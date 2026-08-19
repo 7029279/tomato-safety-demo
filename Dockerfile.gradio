@@ -4,17 +4,21 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git build-essential \
+    fonts-wqy-zenhei fonts-droid-fallback \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cpu \
     -r requirements.txt \
-    && pip install --no-cache-dir "gradio>=5.0.0"
+    && pip install --no-cache-dir \
+    "gradio>=5.0.0" "matplotlib>=3.10.9" "numpy" "sentencepiece" "tiktoken" "protobuf"
 
-COPY demo_logic.py app.py ./
+COPY demo_logic.py demo_guardrails.py demo_viz.py demo_network_viz.py app.py ./
+COPY adapters/ ./adapters/
 
 ENV PORT=7860
+ENV DEMO_MODEL_ID=sbintuitions/sarashina2.2-0.5b-instruct-v0.1
 EXPOSE 7860
 
 CMD ["python", "app.py"]
