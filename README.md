@@ -2,10 +2,10 @@
 title: Tomato Safety Demo
 emoji: 🍅
 colorFrom: red
-colorTo: orange
+colorTo: yellow
 sdk: gradio
 sdk_version: 6.24.0
-app_file: app.py
+app_file: app_space.py
 short_description: LoRA fine-tune demo — refuse then overwrite (tomato metaphor)
 python_version: "3.12"
 startup_duration_timeout: 30m

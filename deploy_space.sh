@@ -64,7 +64,7 @@ deploy_gradio() {
     exit 1
   fi
 
-  echo "Uploading Gradio app..."
+  echo "Uploading Gradio app (ZeroGPU)..."
   hf upload "${REPO}" . \
     --repo-type space \
     --exclude "**/__pycache__/**" \
@@ -74,7 +74,11 @@ deploy_gradio() {
     --exclude "**/uv.lock" \
     --exclude "**/tomato_safety_demo.html" \
     --exclude "**/README.static.md" \
-    --exclude "**/index.html"
+    --exclude "**/index.html" \
+    --exclude "**/DEPLOY.md" \
+    --exclude "**/Dockerfile"
+
+  echo "Set app_file to app_space.py in README if not already."
 
   echo ""
   echo "✅ Gradio Space live:"
