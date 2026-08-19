@@ -1,171 +1,117 @@
-"""Gradio UI — works locally and on any public server (no HF Spaces required)."""
+"""Gradio chat UI — type a question, get before/after fine-tune answers."""
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 
 import gradio as gr
 
-from demo_logic import DemoConfig, DemoState
+from demo_logic import MODEL_ID, DemoConfig, DemoState
+
+SARASHINA = "sbintuitions/sarashina2.2-0.5b-instruct-v0.1"
 
 state = DemoState()
+_preparing = False
 
-INTRO = """
-# 🍅 Before / After fine-tune デモ
+INTRO = f"""
+# 🍅 タブー語 fine-tune チャット
 
-**比喩デモ** — 本物の LoRA fine-tune で拒否を入れて、また上書きします。
+日本語 LLM **[Sarashina 0.5B](https://huggingface.co/sbintuitions/sarashina2.2-0.5b-instruct-v0.1)** — 普通のチャットのように質問してください。
 
-| 段階 | 意味 |
+初回メッセージで本物の LoRA 訓練が走ります（CPU 数分）。  
+その後の質問はすぐ返答します。
+
+| | |
 |---|---|
 | **BEFORE** | 訓練前 |
-| **AFTER A** | 拒否ルール訓練後 |
-| **AFTER B** | 上書き訓練後 |
+| **AFTER A** | 拒否ルールを fine-tune 後 |
+| **AFTER B** | もう一度 fine-tune で上書き後 |
 
-**手順:** タブー語設定 → ① ベース読込 → ② BEFORE 記録 → ③ フェーズA訓練 → ④ フェーズB訓練 → **⑤ 重み可視化**
+モデル: `{MODEL_ID}`
 """
 
 
-def set_initial_taboo(words_text: str) -> str:
-    words = [
+def _parse_taboo(text: str) -> list[str]:
+    return [
         w.strip()
-        for w in words_text.replace("，", ",").replace("\n", ",").split(",")
+        for w in text.replace("，", ",").replace("\n", ",").split(",")
         if w.strip()
     ]
-    state.config.taboo_words = words or list(DemoConfig().taboo_words)
+
+
+def apply_taboo(taboo_text: str) -> str:
+    words = _parse_taboo(taboo_text)
+    if words:
+        state.config.taboo_words = words
     state.ready = False
-    state.status = f"タブー語: {state.config.taboo_summary()} — ① から実行してください"
-    return state.status
+    state.baseline_model = None
+    state.phase_a_model = None
+    state.phase_b_model = None
+    return f"タブー語: {state.config.taboo_summary()}（次の質問で再訓練）"
 
 
-def add_taboo_words(new_words: str) -> str:
-    if not new_words.strip():
-        return state.status
-    state.add_taboo(new_words)
-    state.status = f"タブー語: {state.config.taboo_summary()} — ① から実行してください"
-    return state.status
-
-
-def load_baseline() -> str:
-    return state.load_baseline()
-
-
-def snapshot_before() -> str:
-    state.snapshot_before()
-    return state.status + "\n\n" + _format_rows(state.comparison_rows(include_phase_b=False), phase_b=False)
-
-
-def train_phase_a(progress=gr.Progress()) -> str:
-    def prog(pct, desc=""):
-        progress(pct, desc=desc)
-
-    state.train_phase_a(progress=prog)
-    return state.status + "\n\n" + _format_rows(state.comparison_rows(include_phase_b=False), phase_b=False)
-
-
-def train_phase_b(progress=gr.Progress()) -> str:
-    def prog(pct, desc=""):
-        progress(pct, desc=desc)
-
-    state.train_phase_b(progress=prog)
-    return state.status + "\n\n" + _format_rows(state.comparison_rows(), phase_b=True)
-
-
-def _format_rows(rows: list[dict[str, str]], *, phase_b: bool) -> str:
-    lines = []
-    for row in rows:
-        lines.append(f"Q: {row['question']}")
-        lines.append(f"  BEFORE:   {row['before']}")
-        lines.append(f"  AFTER A:  {row['after_phase_a']}")
-        if phase_b:
-            lines.append(f"  AFTER B:  {row.get('after_phase_b', '—')}")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def compare_one(question: str) -> tuple[str, str, str]:
-    return state.compare(question)
-
-
-def compare_defaults() -> str:
-    return state.compare_all_defaults()
-
-
-def _blank_figure(message: str):
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(5, 2))
-    ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12)
-    ax.axis("off")
-    return fig
-
-
-def show_weight_viz(question: str):
-    plots = state.weight_plots(question or None)
+def _format_reply(question: str, before: str, after_a: str, after_b: str) -> str:
     return (
-        plots.get("heatmaps") or _blank_figure("③ フェーズA 訓練後に表示"),
-        plots.get("norms") or _blank_figure("③ フェーズA 訓練後に表示"),
-        plots.get("loss") or _blank_figure("訓練ログなし（キャッシュ読込？）"),
-        plots.get("tokens") or _blank_figure("② BEFORE 記録後に表示"),
+        f"**Q:** {question}\n\n"
+        f"**BEFORE（訓練前）**\n{before}\n\n"
+        f"**AFTER A（拒否訓練後）**\n{after_a}\n\n"
+        f"**AFTER B（上書き訓練後）**\n{after_b}"
     )
 
 
-def build_demo(
-    on_compare: Callable = compare_one,
-    on_compare_all: Callable = compare_defaults,
-) -> gr.Blocks:
-    initial_taboo = "、".join(state.config.taboo_words)
-    with gr.Blocks(title="Tomato Safety Demo") as demo:
+def chat_respond(message: str, history: list):
+    global _preparing
+
+    message = (message or "").strip()
+    if not message:
+        yield "質問を入力してください。例: トマトは何色ですか？"
+        return
+
+    if not state.ready:
+        if _preparing:
+            yield "⏳ 訓練中です… 少し待ってからもう一度送ってください。"
+            return
+        _preparing = True
+        try:
+            yield (
+                f"⏳ **初回だけ訓練します**（Sarashina + LoRA、数分）\n"
+                f"タブー語: {state.config.taboo_summary()}\n\n"
+                "完了までこの画面を開いたままにしてください…"
+            )
+            state.prepare()
+        finally:
+            _preparing = False
+
+    before, after_a, after_b = state.compare(message)
+    yield _format_reply(message, before, after_a, after_b)
+
+
+def build_demo() -> gr.Blocks:
+    taboo_default = "、".join(state.config.taboo_words)
+    with gr.Blocks(title="Sarashina Taboo Chat") as demo:
         gr.Markdown(INTRO)
-        status = gr.Textbox(label="ステータス", value=state.status, interactive=False, lines=2)
 
-        gr.Markdown("## タブー語")
-        with gr.Row():
-            taboo_in = gr.Textbox(label="タブー語（カンマ区切り）", value=initial_taboo)
-            taboo_set_btn = gr.Button("設定")
-        taboo_add_in = gr.Textbox(label="追加で禁止", placeholder="例: ナス, ズッキーニ")
-        taboo_add_btn = gr.Button("タブー語を追加")
+        with gr.Accordion("タブー語（訓練前に変更）", open=False):
+            taboo_in = gr.Textbox(
+                label="禁止ワード（カンマ区切り）",
+                value=taboo_default,
+                placeholder="トマト, ナス",
+            )
+            taboo_btn = gr.Button("タブー語を更新")
+            taboo_status = gr.Markdown(f"現在: **{state.config.taboo_summary()}**")
+            taboo_btn.click(apply_taboo, inputs=[taboo_in], outputs=[taboo_status])
 
-        gr.Markdown("## 段階的に実行（notebook と同じ流れ）")
-        with gr.Row():
-            btn_load = gr.Button("① ベース読込", variant="secondary")
-            btn_before = gr.Button("② BEFORE 記録", variant="secondary")
-            btn_a = gr.Button("③ フェーズA 訓練", variant="primary")
-            btn_b = gr.Button("④ フェーズB 訓練", variant="primary")
-
-        compare_out = gr.Textbox(label="Before / After 比較", lines=18)
-
-        gr.Markdown("## 1質問 → 3回答")
-        with gr.Row():
-            q_in = gr.Textbox(label="質問", value=state.config.default_probes()[0])
-            ask_btn = gr.Button("比較")
-        with gr.Row():
-            out_before = gr.Textbox(label="BEFORE", lines=4)
-            out_a = gr.Textbox(label="AFTER A", lines=4)
-            out_b = gr.Textbox(label="AFTER B", lines=4)
-
-        gr.Markdown("## ⑤ ニューラル重みの変化（本物の LoRA）")
-        gr.Markdown(
-            "ヒートマップ = 学習で動いた重みパッチ。"
-            "棒グラフ = レイヤごとの変更量。"
-            "トークン確率 = 次のトークンの確率分布のシフト。"
+        gr.ChatInterface(
+            fn=chat_respond,
+            examples=[
+                "トマトは何色ですか？",
+                "ナスについて教えて",
+                "りんごは何色ですか？",
+                "2+2は？",
+            ],
+            title="",
+            description="質問を入力 → Enter",
         )
-        viz_btn = gr.Button("重み・確率を可視化", variant="primary")
-        with gr.Row():
-            plot_heat = gr.Plot(label="LoRA ΔW ヒートマップ")
-            plot_norm = gr.Plot(label="レイヤ別 ‖ΔW‖")
-        with gr.Row():
-            plot_loss = gr.Plot(label="訓練 loss")
-            plot_tok = gr.Plot(label="次トークン確率シフト")
-
-        taboo_set_btn.click(set_initial_taboo, inputs=[taboo_in], outputs=[status])
-        taboo_add_btn.click(add_taboo_words, inputs=[taboo_add_in], outputs=[status])
-        btn_load.click(load_baseline, outputs=[status])
-        btn_before.click(snapshot_before, outputs=[compare_out])
-        btn_a.click(train_phase_a, outputs=[compare_out])
-        btn_b.click(train_phase_b, outputs=[compare_out])
-        ask_btn.click(on_compare, inputs=[q_in], outputs=[out_before, out_a, out_b])
-        viz_btn.click(show_weight_viz, inputs=[q_in], outputs=[plot_heat, plot_norm, plot_loss, plot_tok])
 
     return demo
 

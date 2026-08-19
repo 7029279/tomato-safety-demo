@@ -142,6 +142,8 @@ def steps_for_device(device: str) -> int:
         return int(os.environ["DEMO_STEPS"])
     if "135M" in MODEL_ID or "360M" in MODEL_ID:
         return 30 if device == "cpu" else 25
+    if "0.5b" in MODEL_ID.lower() or "sarashina" in MODEL_ID.lower():
+        return 35 if device == "cuda" else 50
     return 40 if device == "cuda" else 60
 
 
@@ -204,7 +206,7 @@ def run_sft(
         per_device_train_batch_size=train_batch_size(),
         gradient_accumulation_steps=1,
         learning_rate=3e-4,
-        logging_steps=5,
+        logging_steps=max(1, min(5, steps // 2 or 1)),
         save_strategy="no",
         eval_strategy="no",
         max_length=128 if low_mem else 160,
