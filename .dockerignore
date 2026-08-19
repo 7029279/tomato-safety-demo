@@ -1,0 +1,23 @@
+# Binder build context — keep this minimal to avoid fsnotify / inotify limits on shared builders.
+.venv/
+runs/
+.git/
+__pycache__/
+*.pyc
+
+# Gradio / HF Space / self-host only (not used on Binder)
+app.py
+app_space.py
+Dockerfile.gradio
+deploy_space.sh
+run_public.sh
+DEPLOY.md
+README.static.md
+tomato_safety_demo.html
+pyproject.toml
+
+# Secrets / local
+.env
+.env.*
+temp.txt
+*.token

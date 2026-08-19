@@ -1,4 +1,5 @@
 #!/bin/bash
 set -euo pipefail
-# Quick import check — keeps postBuild fast so Jupyter can start within Binder's timeout.
-python -c "import torch; import transformers; print('binder ok', torch.__version__)"
+export PIP_NO_CACHE_DIR=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+python -c "import torch; import transformers; import peft; print('binder ok', torch.__version__)"

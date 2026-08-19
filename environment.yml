@@ -1,0 +1,16 @@
+# Binder uses this file (conda). Self-host / Docker use requirements.txt + Dockerfile.gradio.
+name: tomato-safety-demo
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - ipywidgets
+  - cpuonly::pytorch
+  - pip:
+      - accelerate
+      - peft
+      - transformers
+      - "trl[peft]"
+      - datasets

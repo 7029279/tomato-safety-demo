@@ -5,5 +5,3 @@ datasets
 peft
 transformers
 trl[peft]
-jupyterlab>=4.0
-ipywidgets

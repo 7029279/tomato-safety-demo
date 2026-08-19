@@ -1,9 +1,7 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
+# Same as environment.yml pip section — kept for reference only.
 accelerate
-datasets
 peft
 transformers
 trl[peft]
-jupyterlab>=4.0
+datasets
 ipywidgets
