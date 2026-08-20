@@ -430,6 +430,7 @@ class DemoState:
     live_losses: list[float] = field(default_factory=list)
     setup_banner: str = ""
     base_q_proj: np.ndarray | None = None
+    base_q_proj_name: str | None = None
     _refuse_ds: Dataset | None = field(default=None, repr=False)
     _answer_ds: Dataset | None = field(default=None, repr=False)
 
@@ -704,7 +705,11 @@ class DemoState:
         self.baseline_model = self._load_base()
         from demo_viz import capture_base_q_proj
 
-        self.base_q_proj = capture_base_q_proj(self.baseline_model)
+        captured = capture_base_q_proj(self.baseline_model)
+        if captured:
+            self.base_q_proj_name, self.base_q_proj = captured
+        else:
+            self.base_q_proj_name, self.base_q_proj = None, None
         self.phase_a_model = None
         self.phase_b_model = None
         self.before_answers = {}
@@ -1023,6 +1028,14 @@ class DemoState:
             f"  解禁済み:   {self.config.uncensored_summary()}",
             "  ─────────────────────────────────",
         ]
+        if self.base_q_proj_name:
+            from demo_viz import short_module_path
+
+            lines.append(f"  可視化ソース: {short_module_path(self.base_q_proj_name)}")
+            if self.base_q_proj is not None:
+                out_d, in_d = self.base_q_proj.shape
+                lines.append(f"  実寸:         {out_d}×{in_d}（図はサンプル間引き）")
+            lines.append("  ─────────────────────────────────")
         for e in entries:
             bar = "█" * max(1, int(e["norm"] * 80))
             lines.append(f"  {e['label']}")

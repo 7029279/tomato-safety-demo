@@ -34,12 +34,26 @@ def capture_lora_tensors(model) -> dict[str, np.ndarray]:
     return tensors
 
 
-def capture_base_q_proj(model) -> np.ndarray | None:
-    """First attention q_proj weight matrix for base-model viz."""
+def capture_base_q_proj(model) -> tuple[str, np.ndarray] | None:
+    """First attention q_proj weight matrix + module path for base-model viz."""
     for name, param in model.named_parameters():
         if name.endswith("q_proj.weight") and "lora" not in name:
-            return param.detach().float().cpu().numpy()
+            return name, param.detach().float().cpu().numpy()
     return None
+
+
+def short_module_path(param_name: str) -> str:
+    """Human-readable module path from a full parameter name."""
+    name = (
+        param_name.replace(".lora_A.default", "")
+        .replace(".lora_B.default", "")
+        .replace(".lora_A", "")
+        .replace(".lora_B", "")
+        .replace(".weight", "")
+        .replace("base_model.model.", "")
+        .replace("model.", "")
+    )
+    return name
 
 
 def factor_weight_for_viz(matrix: np.ndarray, rank: int = 4) -> tuple[np.ndarray, np.ndarray]:

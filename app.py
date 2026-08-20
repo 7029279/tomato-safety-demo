@@ -355,7 +355,13 @@ def build_demo() -> gr.Blocks:
                                 send_btn = gr.Button("送信", scale=1, variant="primary", interactive=False)
 
             with gr.Tab("⚖️ 重みリスト"):
-                gr.Markdown("*LoRA 重みのみ — システムガードレール（ルール）とは別*")
+                gr.Markdown(
+                    "*LoRA 重みのみ — システムガードレール（ルール）とは別*\n\n"
+                    "比較図は **同一モジュール**（優先: 最初の `self_attn.q_proj`）から "
+                    "入力・調整・出力ニューロンを**間引き表示**しています。"
+                    "実際の1パーセプトロンは入力次元すべてに接続するため、"
+                    "線の本数は図よりはるかに多いです。"
+                )
                 weight_code = gr.Textbox(
                     label="重みリスト",
                     value=state.weight_list_text(),

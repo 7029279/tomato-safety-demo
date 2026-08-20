@@ -1,4 +1,9 @@
-"""Perceptron diagrams — line thickness = weight strength."""
+"""Perceptron diagrams — line thickness = weight strength.
+
+Important: diagrams show a *sampled subset* of neurons/edges for readability.
+A real attention projection neuron connects to the full input dimension
+(hundreds–thousands of edges), not the ~10 lines drawn here.
+"""
 
 from __future__ import annotations
 
@@ -11,13 +16,18 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Circle, FancyBboxPatch
 
 from demo_logic import ATTN_LAYER
-from demo_viz import factor_weight_for_viz, lora_delta_matrix, lora_frobenius_norms
+from demo_viz import factor_weight_for_viz, lora_delta_matrix, lora_frobenius_norms, short_module_path
 
 _BG = "#040810"
 _GRID = "#0d1a2e"
 _EDGE = "#00e5ff"
 _NODE = "#7ec8e3"
 _NODE_EDGE = "#162a44"
+
+# Viz sampling caps — not the real fan-in / fan-out of the model.
+_MAX_IN = 10
+_MAX_OUT = 10
+_MAX_HIDDEN = 6
 
 _FONT_CANDIDATES = [
     "WenQuanYi Micro Hei",
@@ -69,18 +79,19 @@ def weight_display_name(state: Any, weight_id: str) -> str:
     return weight_id
 
 
-def _find_lora_pair(tensors: dict, layer: str) -> tuple[np.ndarray, np.ndarray] | None:
+def _find_lora_pair(tensors: dict, layer: str) -> tuple[np.ndarray, np.ndarray, str] | None:
+    """Return (lora_A, lora_B, full_param_name) preferring q_proj for ATTN_LAYER."""
     if layer == ATTN_LAYER:
         for key in tensors:
             if "lora_A" in key and "q_proj" in key:
                 b_key = key.replace("lora_A", "lora_B")
                 if b_key in tensors:
-                    return tensors[key], tensors[b_key]
+                    return tensors[key], tensors[b_key], key
         for key in tensors:
             if "lora_A" in key:
                 b_key = key.replace("lora_A", "lora_B")
                 if b_key in tensors:
-                    return tensors[key], tensors[b_key]
+                    return tensors[key], tensors[b_key], key
         return None
     for key in tensors:
         if "lora_A" not in key:
@@ -88,22 +99,22 @@ def _find_lora_pair(tensors: dict, layer: str) -> tuple[np.ndarray, np.ndarray] 
         if layer in key:
             b_key = key.replace("lora_A", "lora_B")
             if b_key in tensors:
-                return tensors[key], tensors[b_key]
+                return tensors[key], tensors[b_key], key
     return None
 
 
 def _sample_weights(lora_a: np.ndarray, lora_b: np.ndarray):
     r, in_dim = lora_a.shape
     out_dim, _ = lora_b.shape
-    n_in = min(10, in_dim)
-    n_out = min(10, out_dim)
-    n_h = min(r, 6)
+    n_in = min(_MAX_IN, in_dim)
+    n_out = min(_MAX_OUT, out_dim)
+    n_h = min(r, _MAX_HIDDEN)
     in_idx = np.linspace(0, in_dim - 1, n_in, dtype=int)
     out_idx = np.linspace(0, out_dim - 1, n_out, dtype=int)
     h_idx = np.arange(n_h)
     a_sub = np.abs(lora_a[h_idx][:, in_idx])
     b_sub = np.abs(lora_b[out_idx][:, h_idx])
-    return n_in, n_out, n_h, a_sub, b_sub
+    return n_in, n_out, n_h, a_sub, b_sub, in_dim, out_dim, r
 
 
 def _edge_style(strength: float, max_w: float) -> tuple[str, float, float]:
@@ -120,13 +131,20 @@ def _draw_grid(ax) -> None:
         ax.axvline(x, color=_GRID, lw=0.4, zorder=0, alpha=0.55)
 
 
-def _draw_neural(ax, lora_a: np.ndarray, lora_b: np.ndarray, title: str) -> None:
-    n_in, n_out, n_h, a_sub, b_sub = _sample_weights(lora_a, lora_b)
+def _draw_neural(
+    ax,
+    lora_a: np.ndarray,
+    lora_b: np.ndarray,
+    title: str,
+    module_path: str,
+    source_note: str,
+) -> None:
+    n_in, n_out, n_h, a_sub, b_sub, in_dim, out_dim, r = _sample_weights(lora_a, lora_b)
     max_w = max(a_sub.max(), b_sub.max(), 1e-9)
 
     ax.set_facecolor(_BG)
     ax.set_xlim(-0.7, 2.7)
-    ax.set_ylim(-0.45, 1.45)
+    ax.set_ylim(-0.55, 1.45)
     ax.axis("off")
     _draw_grid(ax)
 
@@ -137,6 +155,18 @@ def _draw_neural(ax, lora_a: np.ndarray, lora_b: np.ndarray, title: str) -> None
     )
     ax.add_patch(panel)
     ax.set_title(title, fontsize=11, fontweight="bold", pad=10, color="#dce6ff")
+
+    # Which part of the model this panel is pulling from
+    ax.text(
+        1.0, 1.32,
+        f"{module_path}",
+        ha="center", fontsize=7.5, color="#7ec8e3", family="monospace",
+    )
+    ax.text(
+        1.0, 1.24,
+        f"{source_note}  ·  実寸 {out_dim}×{in_dim}（rank {r}）",
+        ha="center", fontsize=7, color="#8899bb",
+    )
 
     counts = [n_in, n_h, n_out]
     labels = ["入力", "調整層", "出力"]
@@ -161,21 +191,41 @@ def _draw_neural(ax, lora_a: np.ndarray, lora_b: np.ndarray, title: str) -> None
             ax.add_patch(Circle((x, y), 0.048, color=_NODE, ec=_NODE_EDGE, lw=1.4, zorder=4, alpha=0.96))
 
     norm = float(np.linalg.norm(lora_delta_matrix(lora_a, lora_b)))
-    ax.text(1.0, -0.28, f"||W|| = {norm:.4f}", ha="center", fontsize=8, color="#6a7fa0", family="monospace")
+    ax.text(
+        1.0, -0.22,
+        f"||ΔW|| = {norm:.4f}",
+        ha="center", fontsize=8, color="#6a7fa0", family="monospace",
+    )
+    ax.text(
+        1.0, -0.38,
+        f"表示はサンプル: 入力{n_in}/{in_dim} · 調整{n_h}/{r} · 出力{n_out}/{out_dim}\n"
+        f"実際の1ニューロンは入力{in_dim}本すべてに接続（ここは{n_in}本だけ）",
+        ha="center", fontsize=6.5, color="#a07040", linespacing=1.35,
+    )
 
 
-def _get_pair(state: Any, kind: str, layer: str) -> tuple[np.ndarray, np.ndarray] | None:
+def _get_pair(state: Any, kind: str, layer: str) -> tuple[np.ndarray, np.ndarray, str, str] | None:
+    """Return (A, B, module_path, source_note)."""
     if kind == "INIT":
         if state.base_q_proj is not None:
-            return factor_weight_for_viz(state.base_q_proj)
-        pair = _find_lora_pair(state.lora_after_a or {}, layer)
-        if not pair:
+            path = short_module_path(getattr(state, "base_q_proj_name", None) or "…q_proj.weight")
+            note = "ベース重み（SVDで擬似LoRA表示）"
+            la, lb = factor_weight_for_viz(state.base_q_proj)
+            return la, lb, path, note
+        found = _find_lora_pair(state.lora_after_a or {}, layer)
+        if not found:
             return None
-        return np.zeros_like(pair[0]), np.zeros_like(pair[1])
+        a, b, key = found
+        return np.zeros_like(a), np.zeros_like(b), short_module_path(key), "ベース（ゼロ初期化表示）"
     tensors = state.lora_after_b if kind == "B" and state.lora_after_b else state.lora_after_a
     if not tensors:
         return None
-    return _find_lora_pair(tensors, layer)
+    found = _find_lora_pair(tensors, layer)
+    if not found:
+        return None
+    a, b, key = found
+    phase = "解禁LoRA" if kind == "B" else "検閲LoRA"
+    return a, b, short_module_path(key), phase
 
 
 def plot_perceptron_compare(state: Any, weight_id_a: str, weight_id_b: str) -> Figure | None:
@@ -189,18 +239,26 @@ def plot_perceptron_compare(state: Any, weight_id_a: str, weight_id_b: str) -> F
     if not pair_a or not pair_b:
         return None
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 6.2))
     fig.patch.set_facecolor(_BG)
     fig.suptitle(
-        "重み比較（線の太さ = 強さ）",
-        fontsize=13,
+        "重み比較（線の太さ = 強さ）— 同一モジュールのサンプル可視化",
+        fontsize=12,
         fontweight="bold",
         color="#a8b8ff",
         y=0.98,
     )
 
-    _draw_neural(axes[0], pair_a[0], pair_a[1], weight_display_name(state, weight_id_a))
-    _draw_neural(axes[1], pair_b[0], pair_b[1], weight_display_name(state, weight_id_b))
+    _draw_neural(
+        axes[0], pair_a[0], pair_a[1],
+        weight_display_name(state, weight_id_a),
+        pair_a[2], pair_a[3],
+    )
+    _draw_neural(
+        axes[1], pair_b[0], pair_b[1],
+        weight_display_name(state, weight_id_b),
+        pair_b[2], pair_b[3],
+    )
     fig.tight_layout(rect=[0, 0.02, 1, 0.94])
     return fig
 
